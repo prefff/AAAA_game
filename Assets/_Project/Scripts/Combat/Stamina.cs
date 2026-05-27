@@ -24,7 +24,12 @@ namespace Game.Combat
 
         public UnityEvent<float> OnStaminaChanged; // normalized
 
-        private void Awake() => _current = _max;
+        private void Awake()
+        {
+            // При AddComponent в рантайме UnityEvent остаётся null — подстраховываемся.
+            if (OnStaminaChanged == null) OnStaminaChanged = new UnityEvent<float>();
+            _current = _max;
+        }
 
         private void Update()
         {

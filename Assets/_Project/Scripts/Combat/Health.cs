@@ -23,6 +23,12 @@ namespace Game.Combat
 
         private void Awake()
         {
+            // Когда компонент создаётся через AddComponent в рантайме,
+            // UnityEvent-поля остаются null (Unity инициализирует их только при десериализации в инспекторе).
+            // Подстраховываемся, чтобы AddListener/Invoke не падали с NullReferenceException.
+            if (OnHealthChanged == null) OnHealthChanged = new UnityEvent<float>();
+            if (OnDied == null) OnDied = new UnityEvent();
+
             _current = _maxHealth;
         }
 
