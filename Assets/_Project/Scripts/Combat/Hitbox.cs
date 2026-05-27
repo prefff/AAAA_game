@@ -15,7 +15,7 @@ namespace Game.Combat
         [SerializeField] private LayerMask _hurtboxLayers = ~0;
         [SerializeField] private bool _startInactive = true;
         [Tooltip("Логировать каждое попадание в Console.")]
-        [SerializeField] private bool _debugLog = true;
+        [SerializeField] private bool _debugLog = false;
         [Tooltip("Рисовать gizmo хитбокса в Scene-view (красный когда активен, серый когда нет).")]
         [SerializeField] private bool _debugDrawGizmo = true;
 

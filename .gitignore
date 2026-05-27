@@ -40,6 +40,14 @@
 # VSCode workspace settings
 .vscode/
 
+# Unity recovery folder (создаётся Editor'ом при автосейве/crash)
+/[Aa]ssets/_Recovery/
+/[Aa]ssets/_Recovery.meta
+
+# Local build output
+/Builds/
+/build.log
+
 # Gradle cache directory
 .gradle/
 

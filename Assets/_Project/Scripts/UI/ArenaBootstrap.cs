@@ -1,4 +1,6 @@
 ﻿using Game.Characters;
+using Game.Combat;
+using Game.Core;
 using Game.Input;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -24,8 +26,27 @@ namespace Game.UI
         [SerializeField] private float _hpBarWidth = 320f;
         [SerializeField] private float _hpBarHeight = 24f;
 
+        [Header("Performance")]
+        [Tooltip("Целевой FPS. 0 = использовать частоту обновления экрана (60/90/120 Гц).")]
+        [SerializeField] private int _targetFps = 0;
+
         private void Awake()
         {
+            // Принудительно landscape — страховка на случай, если Player Settings вдруг сбросились.
+            // На мобиле зафиксирует ориентацию; в редакторе не повлияет (Screen.orientation там игнорируется).
+            Screen.orientation = ScreenOrientation.LandscapeLeft;
+            Screen.autorotateToLandscapeLeft = true;
+            Screen.autorotateToLandscapeRight = true;
+            Screen.autorotateToPortrait = false;
+            Screen.autorotateToPortraitUpsideDown = false;
+
+            // Снимаем дефолтный 30 FPS на мобилках, используем максимальную частоту экрана.
+            FrameRateBooster.Apply(_targetFps);
+
+            // Процедурно строим сцену (Player/Dummy/Floor/Camera/Light) — если чего-то нет,
+            // создаёт само. Сцена в репо может быть почти пустой — арена сгенерируется в рантайме.
+            ArenaBuilder.Build(addOnlyMissing: true);
+
             if (_localPlayer == null) _localPlayer = FindLocalPlayer();
 
             EnsureEventSystem();
@@ -33,6 +54,28 @@ namespace Game.UI
             CreateJoystick(canvas.transform);
             if (_localPlayer != null) CreateHud(canvas.transform);
             EnsureGestureBackend();
+            AttachHealthBarsToDummies();
+        }
+
+        /// <summary>
+        /// Каждому объекту с Health (кроме локального игрока — у него уже screen-HUD)
+        /// добавляем WorldSpaceHealthBar. Так полоска появится над любой мишенью —
+        /// Capsule, DummyTarget, любой враг — главное чтобы был Health.
+        /// </summary>
+        private void AttachHealthBarsToDummies()
+        {
+            var healths = FindObjectsByType<Health>(FindObjectsSortMode.None);
+            var localHealth = _localPlayer != null ? _localPlayer.Health : null;
+            foreach (var h in healths)
+            {
+                if (h == null) continue;
+                if (h == localHealth) continue; // не дублируем HUD локального игрока
+
+                // Health может быть на дочернем объекте — вешаем бар на корень (выглядит естественнее).
+                var host = h.transform.root != null ? h.transform.root.gameObject : h.gameObject;
+                if (host.GetComponent<WorldSpaceHealthBar>() == null)
+                    host.AddComponent<WorldSpaceHealthBar>();
+            }
         }
 
         // ---------- UI ----------
@@ -54,7 +97,9 @@ namespace Game.UI
             var scaler = go.GetComponent<CanvasScaler>();
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
             scaler.referenceResolution = new Vector2(1920f, 1080f);
-            scaler.matchWidthOrHeight = 0.5f;
+            // Match by width — для landscape-онли UI это даёт стабильный масштаб на разных
+            // плотностях пикселей: HUD и джойстик скейлятся пропорционально ширине экрана.
+            scaler.matchWidthOrHeight = 0f;
             return canvas;
         }
 

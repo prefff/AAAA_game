@@ -48,8 +48,6 @@ namespace Game.UI
             }
             ForceFilled(_healthFill);
             ForceFilled(_staminaFill);
-
-            Debug.Log($"[FighterHUD] Fighter={_fighter?.name}, HealthFill={(_healthFill ? _healthFill.name : "NULL")}, StaminaFill={(_staminaFill ? _staminaFill.name : "NULL")}", this);
         }
 
         private void TryAutoFindFighter()
@@ -67,7 +65,6 @@ namespace Game.UI
             if (_fighter.Stamina != null) _fighter.Stamina.OnStaminaChanged.RemoveListener(SetStamina);
         }
 
-        private float _debugTimer;
         private void Update()
         {
             // Подстраховка: каждый кадр синхронизируем полоски с реальным значением.
@@ -75,20 +72,6 @@ namespace Game.UI
             if (_fighter == null) return;
             if (_fighter.Health  != null) SetHealth(_fighter.Health.Normalized);
             if (_fighter.Stamina != null) SetStamina(_fighter.Stamina.Normalized);
-
-            // Раз в секунду логируем фактические значения для диагностики.
-            _debugTimer += Time.deltaTime;
-            if (_debugTimer >= 1f)
-            {
-                _debugTimer = 0f;
-                var stam = _fighter.Stamina;
-                var stamGo = stam != null ? stam.gameObject.name : "NULL";
-                var hp = _fighter.Health;
-                var fa = _staminaFill != null ? _staminaFill.fillAmount.ToString("F2") : "NO_IMG";
-                Debug.Log($"[FighterHUD] HP={(hp != null ? hp.Current.ToString("F0") : "?")}/{(hp != null ? hp.Max.ToString("F0") : "?")}, " +
-                          $"Stam={(stam != null ? stam.Current.ToString("F1") : "?")}/{(stam != null ? stam.Max.ToString("F0") : "?")} on '{stamGo}', " +
-                          $"ST_Fill.fillAmount={fa}");
-            }
         }
 
         private void SetHealth(float n)
@@ -113,7 +96,6 @@ namespace Game.UI
             if (img.sprite == null)
             {
                 img.sprite = ArenaBootstrap.MakeWhiteSprite();
-                Debug.LogWarning($"[FighterHUD] У '{img.name}' не был задан Sprite — назначен fallback белый. Без sprite Filled-Image не отображается.", img);
             }
             if (img.type != Image.Type.Filled)
             {
