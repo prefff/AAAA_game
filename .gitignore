@@ -40,7 +40,7 @@
 # VSCode workspace settings
 .vscode/
 
-# Unity recovery folder (создаётся Editor'ом при автосейве/crash)
+# Unity recovery folder (пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ Editor'пїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ/crash)
 /[Aa]ssets/_Recovery/
 /[Aa]ssets/_Recovery.meta
 
@@ -115,3 +115,7 @@ InitTestScene*.unity*
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+
+# Empty Temp folder occasionally created by Unity inside Assets
+/[Aa]ssets/[Tt]emp/
+/[Aa]ssets/[Tt]emp.meta
