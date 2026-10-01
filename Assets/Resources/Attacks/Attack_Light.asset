@@ -17,8 +17,11 @@ MonoBehaviour:
   ActiveFrames: 3
   RecoveryFrames: 12
   Damage: 8
-  Knockback: 2
-  HitstunFrames: 10
-  BlockstunFrames: 6
+  Knockback: 3
+  HitstunFrames: 18
+  BlockstunFrames: 10
+  HitstopFrames: 3
+  HitboxOffset: 1
+  HitboxRadius: 0.6
   StaminaCost: 0
   CanCancelOnHit: 1

@@ -1,0 +1,35 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e07aea07f75bb23469a73140833e0a73, type: 3}
+  m_Name: Fighter_Default
+  m_EditorClassIdentifier: Game.Combat::Game.Combat.FighterDefinition
+  MaxHealth: 100
+  MaxStamina: 100
+  StaminaRegenPerSecond: 25
+  StaminaRegenDelay: 0.6
+  MaxMana: 100
+  ManaRegenPerSecond: 4
+  MoveSpeed: 5
+  BodyRadius: 0.45
+  HurtRadius: 0.5
+  ParryWindowFrames: 11
+  ParryWhiffRecoveryFrames: 8
+  DodgeSpeed: 8
+  DodgeFrames: 15
+  DodgeIFrames: 8
+  DodgeStaminaCost: 20
+  DodgeToParryCancelFrames: 9
+  BlockDamageMultiplier: 0.3
+  BlockKnockbackMultiplier: 0.3
+  InputBufferFrames: 7
+  LightAttack: {fileID: 11400000, guid: acd52b1c8cd66394bab1e6ad282e7f57, type: 2}
+  HeavyAttack: {fileID: 11400000, guid: 1a5be8d58013cc64ba3d233736bf6e93, type: 2}
