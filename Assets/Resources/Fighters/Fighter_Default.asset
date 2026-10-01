@@ -12,24 +12,19 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: e07aea07f75bb23469a73140833e0a73, type: 3}
   m_Name: Fighter_Default
   m_EditorClassIdentifier: Game.Combat::Game.Combat.FighterDefinition
+  Id: default
+  DisplayName: "\u0411\u043E\u0435\u0446"
+  ViewPrefab: {fileID: 0}
   MaxHealth: 100
   MaxStamina: 100
   StaminaRegenPerSecond: 25
-  StaminaRegenDelay: 0.6
   MaxMana: 100
-  ManaRegenPerSecond: 4
+  ManaRegenPerSecond: 5
   MoveSpeed: 5
   BodyRadius: 0.45
   HurtRadius: 0.5
-  ParryWindowFrames: 11
-  ParryWhiffRecoveryFrames: 8
-  DodgeSpeed: 8
-  DodgeFrames: 15
-  DodgeIFrames: 8
-  DodgeStaminaCost: 20
-  DodgeToParryCancelFrames: 9
-  BlockDamageMultiplier: 0.3
-  BlockKnockbackMultiplier: 0.3
-  InputBufferFrames: 7
   LightAttack: {fileID: 11400000, guid: acd52b1c8cd66394bab1e6ad282e7f57, type: 2}
   HeavyAttack: {fileID: 11400000, guid: 1a5be8d58013cc64ba3d233736bf6e93, type: 2}
+  Skill1: {fileID: 0}
+  Skill2: {fileID: 0}
+  Ultimate: {fileID: 0}

@@ -46,7 +46,32 @@ namespace Game.Simulation
         /// <summary> Сколько ещё тиков буферная команда ждёт; 0 — буфер пуст. </summary>
         public int BufferTicks;
 
+        /// <summary> Слот скилла в касте (State == Cast). </summary>
+        public SkillSlot CastSlot;
+        /// <summary> Скилл уже вышел — идёт recovery. </summary>
+        public bool SkillFired;
+        /// <summary> Прицел: направление × доля дальности; ноль — автоприцел. </summary>
+        public FixVec2 SkillAim;
+        public int Cooldown0;
+        public int Cooldown1;
+        public int Cooldown2;
+
+        /// <summary> Сколько попаданий подряд получено в текущей серии (для затухания комбо). </summary>
+        public int ComboHits;
+
         public bool IsAlive => State != ActionState.Dead;
+
+        public int Cooldown(int slot) => slot switch { 0 => Cooldown0, 1 => Cooldown1, 2 => Cooldown2, _ => 0 };
+
+        public void SetCooldown(int slot, int ticks)
+        {
+            switch (slot)
+            {
+                case 0: Cooldown0 = ticks; break;
+                case 1: Cooldown1 = ticks; break;
+                case 2: Cooldown2 = ticks; break;
+            }
+        }
 
         internal void Hash(ref StateHasher h)
         {
@@ -58,6 +83,36 @@ namespace Game.Simulation
             h.Add(BlockHeld);
             h.Add(Health); h.Add(Stamina); h.Add(StaminaRegenDelay); h.Add(Mana);
             h.Add((int)Buffered.Kind); h.Add(Buffered.DirX); h.Add(Buffered.DirY); h.Add(Buffered.Id); h.Add(BufferTicks);
+            h.Add((int)CastSlot); h.Add(SkillFired); h.Add(SkillAim);
+            h.Add(Cooldown0); h.Add(Cooldown1); h.Add(Cooldown2);
+            h.Add(ComboHits);
+        }
+    }
+
+    /// <summary> Снаряд или область скилла на арене. Значение (структура) — снимок копированием, как у бойцов. </summary>
+    public struct SkillObject
+    {
+        public SkillObjectKind Kind;
+        /// <summary> Чей объект сейчас: кого он не задевает и кому засчитывается попадание (отражение меняет владельца). </summary>
+        public int Owner;
+        /// <summary> Чей это скилл: данные берутся из Setup.Fighters[Caster].Skill(Slot) и после отражения. </summary>
+        public int Caster;
+        public SkillSlot Slot;
+        public FixVec2 Position;
+        /// <summary> Снаряд: м/тик. </summary>
+        public FixVec2 Velocity;
+        /// <summary> Снаряд — до исчезновения, область — до взрыва. </summary>
+        public int TicksLeft;
+        /// <summary> Прошёл сквозь неуязвимость цели — больше её не задевает. </summary>
+        public bool Evaded;
+
+        public bool IsActive => Kind != SkillObjectKind.None;
+
+        internal void Hash(ref StateHasher h)
+        {
+            h.Add((int)Kind);
+            if (Kind == SkillObjectKind.None) return;
+            h.Add(Owner); h.Add(Caster); h.Add((int)Slot); h.Add(Position); h.Add(Velocity); h.Add(TicksLeft); h.Add(Evaded);
         }
     }
 
@@ -80,6 +135,10 @@ namespace Game.Simulation
 
         public readonly FighterSim[] Fighters = new FighterSim[FighterCount];
 
+        /// <summary> Снаряды и области. Фиксированный пул: без аллокаций, снимок — копирование массива. </summary>
+        public const int MaxSkillObjects = 12;
+        public readonly SkillObject[] Objects = new SkillObject[MaxSkillObjects];
+
         public int Wins(int fighter) => fighter == 0 ? Wins0 : Wins1;
 
         public void CopyFrom(GameState other)
@@ -94,6 +153,7 @@ namespace Game.Simulation
             LastRoundWinner = other.LastRoundWinner;
             MatchWinner = other.MatchWinner;
             Array.Copy(other.Fighters, Fighters, FighterCount);
+            Array.Copy(other.Objects, Objects, MaxSkillObjects);
         }
 
         public GameState Clone()
@@ -109,6 +169,7 @@ namespace Game.Simulation
             h.Add(Tick); h.Add((int)Phase); h.Add(PhaseTicks); h.Add(RoundTicksLeft); h.Add(Round);
             h.Add(Wins0); h.Add(Wins1); h.Add(LastRoundWinner); h.Add(MatchWinner);
             for (int i = 0; i < FighterCount; i++) Fighters[i].Hash(ref h);
+            for (int i = 0; i < MaxSkillObjects; i++) Objects[i].Hash(ref h);
             return h.Value;
         }
     }

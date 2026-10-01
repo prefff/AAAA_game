@@ -7,12 +7,14 @@ namespace Game.UI
 {
     /// <summary>
     /// HUD матча: таймер раунда и счёт сверху по центру, крупная надпись по центру экрана
-    /// («Раунд 2» на отсчёте, «Бой!», «KO» / «Время!», итог матча) и кнопка «Ещё раз» после матча.
+    /// («Раунд 2» на отсчёте, «Бой!», «KO» / «Время!», итог матча), кнопка «Ещё раз» после матча и короткие
+    /// подсказки боя: серия попаданий, пробитый блок, отражённый снаряд.
     /// Всё читается из состояния симуляции; рестарт идёт командой через симуляцию.
     /// </summary>
     public class MatchHUD : MonoBehaviour
     {
         private const float FightBannerSeconds = 0.7f;
+        private const float CalloutSeconds = 1.1f;
 
         private MatchRunner _runner;
         private Text _timer;
@@ -22,9 +24,12 @@ namespace Game.UI
         private Text _banner;
         private Text _subtitle;
         private Button _restart;
+        private Text _callout;
         private float _fightBannerUntil;
+        private float _calloutUntil;
 
         public string BannerText => _banner != null && _banner.enabled ? _banner.text : string.Empty;
+        public string CalloutText => _callout != null && _callout.enabled ? _callout.text : string.Empty;
         public bool RestartVisible => _restart != null && _restart.gameObject.activeSelf;
 
         public void Bind(MatchRunner runner) => _runner = runner;
@@ -40,6 +45,8 @@ namespace Game.UI
             var center = new Vector2(0.5f, 0.5f);
             _banner = UiFactory.Label("Banner", transform, center, new Vector2(0f, 120f), new Vector2(900f, 140f), 110, TextAnchor.MiddleCenter);
             _subtitle = UiFactory.Label("Subtitle", transform, center, new Vector2(0f, 30f), new Vector2(900f, 60f), 40, TextAnchor.MiddleCenter);
+            _callout = UiFactory.Label("Callout", transform, center, new Vector2(0f, 260f), new Vector2(900f, 60f), 44, TextAnchor.MiddleCenter);
+            _callout.enabled = false;
             _restart = CreateButton("Restart", "Ещё раз", center, new Vector2(0f, -70f));
             _restart.onClick.AddListener(() => _runner?.RequestRestart());
         }
@@ -56,7 +63,30 @@ namespace Game.UI
 
         private void OnSimEvent(SimEvent e)
         {
-            if (e.Type == SimEventType.RoundStarted) _fightBannerUntil = Time.unscaledTime + FightBannerSeconds;
+            int me = _runner.LocalPlayer;
+            switch (e.Type)
+            {
+                case SimEventType.RoundStarted:
+                    _fightBannerUntil = Time.unscaledTime + FightBannerSeconds;
+                    break;
+                case SimEventType.Hit when e.Combo >= 2:
+                    Callout(e.Actor == me ? $"Серия ×{e.Combo}" : $"Получено ×{e.Combo}",
+                        e.Actor == me ? new Color(1f, 0.85f, 0.3f) : new Color(1f, 0.5f, 0.5f));
+                    break;
+                case SimEventType.GuardBreak:
+                    Callout(e.Actor == me ? "Блок пробит!" : "Ваш блок пробит!", new Color(1f, 0.6f, 0.15f));
+                    break;
+                case SimEventType.ProjectileReflected:
+                    Callout(e.Actor == me ? "Отражено!" : "Снаряд отражён", new Color(0.7f, 0.95f, 1f));
+                    break;
+            }
+        }
+
+        private void Callout(string text, Color color)
+        {
+            _callout.text = text;
+            _callout.color = color;
+            _calloutUntil = Time.unscaledTime + CalloutSeconds;
         }
 
         private void LateUpdate()
@@ -93,6 +123,9 @@ namespace Game.UI
             }
             SetText(_banner, banner);
             SetText(_subtitle, subtitle);
+
+            bool callout = Time.unscaledTime < _calloutUntil && s.Phase == MatchPhase.Fight;
+            if (_callout.enabled != callout) _callout.enabled = callout;
 
             bool showRestart = s.Phase == MatchPhase.MatchOver;
             if (_restart.gameObject.activeSelf != showRestart) _restart.gameObject.SetActive(showRestart);

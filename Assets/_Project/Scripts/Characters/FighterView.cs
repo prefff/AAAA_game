@@ -7,7 +7,8 @@ namespace Game.Characters
     /// Вид бойца: только читает состояние симуляции и рисует его. Своего игрового состояния нет.
     /// Позиция — последнее состояние симуляции без интерполяции с отставанием (отставание ощущается как задержка).
     /// Пока нет анимаций, цвет показывает состояние и фазы удара (startup — жёлтый, active — красный, recovery —
-    /// бурый, блок — синий, уклонение — зелёный, парирование — белый, оглушение — фиолетовый), а во время active
+    /// бурый, блок — синий, уклонение — зелёный, парирование — белый, оглушение — фиолетовый, каст скилла — голубой,
+    /// пробитый блок — оранжевый), а во время active
     /// под бойцом виден круг хитбокса — так frame data читается глазами.
     /// </summary>
     [DefaultExecutionOrder(100)]
@@ -25,6 +26,9 @@ namespace Game.Characters
         [SerializeField] private Color _dodge = new(0.3f, 1f, 0.6f);
         [SerializeField] private Color _hitstun = new(0.85f, 0.2f, 0.85f);
         [SerializeField] private Color _dead = new(0.15f, 0.15f, 0.15f);
+        [SerializeField] private Color _castStartup = new(0.3f, 0.85f, 1f);
+        [SerializeField] private Color _castRecovery = new(0.25f, 0.45f, 0.55f);
+        [SerializeField] private Color _guardBroken = new(1f, 0.55f, 0.1f);
 
         private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
         private static readonly int ColorId = Shader.PropertyToID("_Color");
@@ -121,6 +125,9 @@ namespace Game.Characters
                 case ActionState.Hitstun:
                 case ActionState.ParryStunned: return _hitstun;
                 case ActionState.Dead: return _dead;
+                case ActionState.Cast:
+                    return f.SkillFired ? _castRecovery : _castStartup;
+                case ActionState.GuardBroken: return _guardBroken;
                 default: return _original;
             }
         }

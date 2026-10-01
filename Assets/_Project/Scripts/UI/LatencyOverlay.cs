@@ -27,7 +27,8 @@ namespace Game.UI
         [SerializeField] private bool _logToConsole = true;
         [SerializeField] private bool _expanded = true;
 
-        private static readonly string[] Commands = { "LightAttack", "HeavyAttack", "BlockStart", "BlockEnd", "Parry", "Dodge" };
+        private static readonly string[] Commands =
+            { "LightAttack", "HeavyAttack", "BlockStart", "BlockEnd", "Parry", "Dodge", "Ability1", "Ability2", "Ultimate" };
         private const float ReferenceHeight = 720f;
 
         private readonly StringBuilder _sb = new(1024);
@@ -114,6 +115,12 @@ namespace Game.UI
             if (_runner == null) return "—";
             int i = _runner.LocalPlayer;
             ref readonly var f = ref _runner.State.Fighters[i];
+            var sk = _runner.Sim.CurrentSkill(_runner.State, i);
+            if (sk != null)
+            {
+                string castPhase = f.SkillFired ? "Recovery" : "Startup";
+                return $"Cast {sk.Name} {castPhase} [{f.StateTicks + 1}/{sk.TotalTicks}]";
+            }
             var atk = _runner.Sim.CurrentAttack(_runner.State, i);
             if (atk == null) return $"{f.State} [{f.StateTicks}]";
             var phase = atk.PhaseAt(f.StateTicks);
@@ -133,6 +140,7 @@ namespace Game.UI
                 SimEventType.Hit => "попадание",
                 SimEventType.Blocked => "блок",
                 SimEventType.Parried => "парирование",
+                SimEventType.GuardBreak => "пробитие блока",
                 _ => e.Type.ToString(),
             };
             return $"{what} ({who}), у вас {(adv > 0 ? "+" : "")}{adv} тиков";
@@ -144,6 +152,7 @@ namespace Game.UI
             BotMode.Block => "Блок",
             BotMode.Attack => "Атака",
             BotMode.Aggressive => "Агрессия",
+            BotMode.Zoner => "Маг",
             _ => mode.ToString(),
         };
 
@@ -156,7 +165,7 @@ namespace Game.UI
 
             string bot = _runner.IsReplaying ? "Повтор" : BotName(_runner.BotMode);
             if (GUI.Button(new Rect(x, top, 130f, h), $"Бот: {bot}"))
-                _runner.BotMode = (BotMode)(((int)_runner.BotMode + 1) % 4);
+                _runner.BotMode = (BotMode)(((int)_runner.BotMode + 1) % TrainingBot.ModeCount);
             x += 134f;
 
             if (GUI.Button(new Rect(x, top, 110f, h), _runner.Training ? "Тренировка" : "Матч"))
@@ -215,14 +224,14 @@ namespace Game.UI
                 if (_style == null)
                 {
                     // Моноширинный шрифт ОС — чтобы колонки таблицы ровнялись.
-                    _font = Font.CreateDynamicFontFromOSFont(new[] { "Consolas", "Roboto Mono", "Droid Sans Mono", "Menlo", "Courier New" }, 13);
+                    _font = MonospaceOSFont(13);
                     _style = new GUIStyle(GUI.skin.box)
                     {
                         alignment = TextAnchor.UpperLeft,
                         fontSize = 13,
-                        font = _font,
                         richText = false,
                     };
+                    if (_font != null) _style.font = _font;
                 }
                 var content = new GUIContent(_text);
                 var size = _style.CalcSize(content);
@@ -230,6 +239,18 @@ namespace Game.UI
             }
 
             GUI.matrix = prev;
+        }
+
+        /// <summary>
+        /// Первый установленный в ОС моноширинный шрифт; null — нет ни одного (тогда шрифт скина). Только из установленных:
+        /// шрифт по имени, которого нет (Consolas на Android), не рисует текст и каждый кадр пишет в лог предупреждение со стеком.
+        /// </summary>
+        private static Font MonospaceOSFont(int size)
+        {
+            var installed = new System.Collections.Generic.HashSet<string>(Font.GetOSInstalledFontNames());
+            foreach (var name in new[] { "Consolas", "Roboto Mono", "Droid Sans Mono", "DroidSansMono", "Cutive Mono", "Menlo", "Courier New" })
+                if (installed.Contains(name)) return Font.CreateDynamicFontFromOSFont(name, size);
+            return null;
         }
     }
 }

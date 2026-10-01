@@ -11,18 +11,15 @@ namespace Game.UI
 {
     /// <summary>
     /// Собирает сцену боя на старте: арена и бойцы (<see cref="ArenaBuilder"/>), Canvas, джойстик, HUD бойцов и матча,
-    /// индикатор противника за краем экрана, распознаватель жестов и оверлей разработчика.
+    /// кнопки скиллов, индикатор противника за краем экрана, распознаватель жестов и оверлей разработчика.
     /// Один компонент на сцену.
     /// </summary>
     public class ArenaBootstrap : MonoBehaviour
     {
         [Header("Бойцы")]
-        [Tooltip("Пусто — Resources/Fighters/Fighter_Default.")]
+        [Tooltip("Пусто — Resources/Fighters/Fighter_Default. Вид бойца берётся из его ассета (ViewPrefab).")]
         [SerializeField] private FighterDefinition _player;
         [SerializeField] private FighterDefinition _opponent;
-        [Tooltip("Префабы видов (необязательно): пусто — капсулы собираются процедурно.")]
-        [SerializeField] private FighterView _playerView;
-        [SerializeField] private FighterView _opponentView;
         [Tooltip("Каким бойцом управляет этот телефон: 0 — синяя сторона, 1 — красная (камера развёрнута).")]
         [SerializeField, Range(0, 1)] private int _localPlayerIndex;
 
@@ -63,15 +60,17 @@ namespace Game.UI
             // Снимаем дефолтный 30 FPS на мобилках, используем максимальную частоту экрана.
             FrameRateBooster.Apply(_targetFps, _disableVSync);
 
-            _arena = ArenaBuilder.Build(_player, _opponent, _localPlayerIndex, _botMode, _training, _playerView, _opponentView);
+            _arena = ArenaBuilder.Build(_player, _opponent, _localPlayerIndex, _botMode, _training);
 
             EnsureEventSystem();
+            var input = EnsureGestureBackend();
+            input.SkillSlotMask = SkillSlotMask(_arena.Runner);
             var canvas = CreateCanvas();
             CreateJoystick(canvas.transform);
             CreateHud(canvas.transform);
             CreateMatchHud(canvas.transform);
+            CreateSkillBar(canvas.transform, input.Settings);
             CreateOffscreenIndicator(canvas.transform);
-            EnsureGestureBackend();
             if (_latencyOverlay) CreateLatencyOverlay();
         }
 
@@ -166,6 +165,19 @@ namespace Game.UI
             go.SetActive(true);
         }
 
+        private void CreateSkillBar(Transform parent, GestureSettings settings)
+        {
+            var go = new GameObject("SkillBar", typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin = Vector2.zero;
+            rt.anchorMax = Vector2.one;
+            rt.offsetMin = rt.offsetMax = Vector2.zero;
+            go.SetActive(false);
+            go.AddComponent<SkillBar>().Bind(_arena.Runner, settings);
+            go.SetActive(true);
+        }
+
         private void CreateOffscreenIndicator(Transform parent)
         {
             var go = new GameObject("OffscreenIndicator", typeof(RectTransform));
@@ -188,10 +200,21 @@ namespace Game.UI
 
         // ---------- Input backend ----------
 
-        private static void EnsureGestureBackend()
+        /// <summary> Слоты своего бойца, где есть скилл: кнопки пустых слотов не рисуются и касаний не ловят. </summary>
+        private static int SkillSlotMask(MatchRunner runner)
         {
-            if (FindAnyObjectByType<TouchInputProvider>() == null)
-                new GameObject("_Input").AddComponent<TouchInputProvider>(); // распознаватель жестов создаётся внутри
+            var spec = runner.Sim.Setup.Fighters[runner.LocalPlayer];
+            int mask = 0;
+            for (int slot = 0; slot < SkillButtonLayout.SlotCount; slot++)
+                if (spec.Skill(slot) != null) mask |= 1 << slot;
+            return mask;
+        }
+
+        private static TouchInputProvider EnsureGestureBackend()
+        {
+            var provider = FindAnyObjectByType<TouchInputProvider>();
+            if (provider == null) provider = new GameObject("_Input").AddComponent<TouchInputProvider>(); // распознаватели создаются внутри
+            return provider;
         }
     }
 }

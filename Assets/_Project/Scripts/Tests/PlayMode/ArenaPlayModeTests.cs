@@ -250,6 +250,62 @@ namespace Game.Tests
         }
 
         [UnityTest]
+        public IEnumerator SkillButton_StartsCastInTheFrameOfTheCommand_ProjectileIsDrawn()
+        {
+            yield return WaitForFight();
+            yield return new WaitForSeconds(0.1f);
+            int me = _runner.LocalPlayer;
+            Assert.IsNotNull(_runner.Sim.Setup.Fighters[me].Skill(0), "У тестового персонажа должен быть нюк");
+
+            _input.Fire(CommandType.Ability1);
+            yield return null; // инжектор выдал команду в Update этого кадра
+            yield return new WaitForEndOfFrame();
+            Assert.AreEqual(ActionState.Cast, _runner.State.Fighters[me].State, "Каст должен начаться в кадре нажатия");
+
+            var view = Object.FindAnyObjectByType<SkillObjectsView>();
+            Assert.IsNotNull(view);
+            float t = 0f;
+            while (view.VisibleProjectiles == 0 && t < 1f) { t += Time.deltaTime; yield return null; }
+            Assert.AreEqual(1, view.VisibleProjectiles, "Снаряд должен быть виден");
+        }
+
+        [UnityTest]
+        public IEnumerator SkillBar_And_AimIndicator_FollowTheSkillFinger()
+        {
+            yield return WaitForFight();
+            var bar = Object.FindAnyObjectByType<SkillBar>();
+            Assert.IsNotNull(bar);
+            var indicator = Object.FindAnyObjectByType<SkillAimIndicator>();
+            Assert.IsNotNull(indicator);
+            Assert.IsFalse(indicator.IsShown);
+            Assert.IsFalse(bar.CancelVisible);
+
+            // Палец на кнопке телепорта, прицел — вправо на половину дальности.
+            EventBus.Raise(new SkillAimInputEvent(1, SkillAimPhase.Held, new Vector2(0.5f, 0f), false));
+            yield return null;
+            Assert.IsTrue(indicator.IsShown, "Пока палец на кнопке, прицел виден");
+            Assert.IsTrue(bar.CancelVisible, "Пока палец на кнопке, видна зона отмены");
+            var me = _runner.State.Fighters[_runner.LocalPlayer].Position;
+            float range = _runner.Sim.Setup.Fighters[_runner.LocalPlayer].Skill(1).Range.ToFloat();
+            Assert.AreEqual(me.X.ToFloat() + range * 0.5f, indicator.TargetPoint.x, 0.1f);
+
+            EventBus.Raise(new SkillAimInputEvent(1, SkillAimPhase.Released, new Vector2(0.5f, 0f), false));
+            yield return null;
+            Assert.IsFalse(indicator.IsShown);
+            Assert.IsFalse(bar.CancelVisible);
+        }
+
+        [UnityTest]
+        public IEnumerator UltimateButton_ShowsInitialCooldown()
+        {
+            yield return WaitForFight();
+            var bar = Object.FindAnyObjectByType<SkillBar>();
+            yield return null;
+            Assert.Greater(bar.CooldownFill(2), 0.5f, "Ультимейт в начале раунда на перезарядке");
+            Assert.AreEqual(0f, bar.CooldownFill(0), "Нюк готов сразу");
+        }
+
+        [UnityTest]
         public IEnumerator BotModeAttack_DamagesThePlayer()
         {
             yield return WaitForFight();

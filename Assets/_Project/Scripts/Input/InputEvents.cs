@@ -14,7 +14,37 @@ namespace Game.Input
         Dodge,
         Ability1,
         Ability2,
-        Ultimate
+        Ultimate,
+    }
+
+    public enum SkillAimPhase
+    {
+        /// <summary> Палец на кнопке скилла: прицел обновляется. </summary>
+        Held,
+        /// <summary> Палец отпущен: команда скилла уходит по последнему прицелу. </summary>
+        Released,
+        /// <summary> Палец отпущен в зоне отмены (или касание прервано): скилла не будет. </summary>
+        Canceled,
+    }
+
+    /// <summary>
+    /// Прицел скилла — непрерывный ввод, как джойстик: публикуется при нажатии, каждом сдвиге и отпускании пальца.
+    /// Aim — мировое направление × доля дальности (0..1); ноль — автоприцел (быстрый каст).
+    /// </summary>
+    public readonly struct SkillAimInputEvent
+    {
+        public readonly int Slot;
+        public readonly SkillAimPhase Phase;
+        public readonly Vector2 Aim;
+        public readonly bool InCancelZone;
+
+        public SkillAimInputEvent(int slot, SkillAimPhase phase, Vector2 aim, bool inCancelZone)
+        {
+            Slot = slot;
+            Phase = phase;
+            Aim = aim;
+            InCancelZone = inCancelZone;
+        }
     }
 
     /// <summary>
@@ -25,7 +55,10 @@ namespace Game.Input
     public readonly struct InputCommand
     {
         public readonly CommandType Type;
-        /// <summary> Нормализованное мировое направление в плоскости XZ (x = мировой X, y = мировой Z); ноль — без направления. </summary>
+        /// <summary>
+        /// Мировое направление в плоскости XZ (x = мировой X, y = мировой Z); ноль — без направления. У уклонения
+        /// единичное, у скилла — прицел (направление × доля дальности).
+        /// </summary>
         public readonly Vector2 Direction;
         public readonly float Timestamp;
         /// <summary> Начало действия игрока (касание; для BlockEnd — отпускание). Шкала Time.realtimeSinceStartupAsDouble; 0 — неизвестно. </summary>

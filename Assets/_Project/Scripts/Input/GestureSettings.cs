@@ -31,6 +31,20 @@ namespace Game.Input
                  "чтобы блок отменял удар до активной фазы. Больше — меньше ложных блоков на медленных тапах.")]
         [Min(0.02f)] public float HoldThreshold = 0.09f;
 
+        [Header("Скиллы (кнопки у правого нижнего угла)")]
+        [Tooltip("Центры кнопок Skill1, Skill2, Ultimate: отступ от правого нижнего угла в пикселях канваса 1920 по ширине. " +
+                 "От краёв экрана — не меньше полного сдвига прицела (SkillAimRadiusMm), иначе к краю не прицелиться.")]
+        public Vector2[] SkillButtonOffsets = { new(430f, 190f), new(320f, 330f), new(210f, 480f) };
+        [Tooltip("Радиус кнопки, пикселей канваса 1920. Касание кнопки — прицел скилла, а не удар.")]
+        [Min(10f)] public float SkillButtonRadius = 78f;
+        [Tooltip("Зона отмены: отпустить палец здесь — скилла не будет. Отступ от правого нижнего угла.")]
+        public Vector2 SkillCancelOffset = new(150f, 715f);
+        [Min(10f)] public float SkillCancelRadius = 85f;
+        [Tooltip("Сдвиг пальца от центра кнопки, мм, дающий полную дальность скилла.")]
+        [Min(1f)] public float SkillAimRadiusMm = 12f;
+        [Tooltip("Сдвиг меньше этого, мм — быстрый каст с автоприцелом.")]
+        [Min(0f)] public float SkillAimDeadZoneMm = 2.5f;
+
         /// <summary> Загрузить ассет из Resources или, если его нет, взять значения по умолчанию. </summary>
         public static GestureSettings LoadOrDefault()
         {

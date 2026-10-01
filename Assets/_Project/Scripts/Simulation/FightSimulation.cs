@@ -8,12 +8,14 @@ namespace Game.Simulation
     /// Никакого времени кадра, камеры, Random и порядка Update: только GameState, TickInput и неизменяемый SimSetup.
     ///
     /// Порядок тика (для каждого бойца, сначала 0, потом 1):
-    ///   ресурсы → стоп-кадр (если есть — только буферизуем ввод) → таймеры состояния (конец recovery/оглушения)
-    ///   → буферная команда → новые команды → бег/стойка → движение.
+    ///   ресурсы и перезарядки → прицел скилла и отмена каста → стоп-кадр (если есть — только буферизуем ввод)
+    ///   → таймеры состояния (конец recovery/оглушения, выход скилла) → буферная команда → новые команды
+    ///   → бег/стойка → движение.
     /// Затем тела расталкиваются и выталкиваются из стен, хитбоксы проверяются для обоих одновременно (размен
-    /// ударами возможен), и обновляется фаза матча.
+    /// ударами возможен), летят снаряды и взрываются области, обновляется фаза матча.
     ///
-    /// Команда, пришедшая в тик, действует в этом же тике: удар входит в startup, уклонение уже сдвигает бойца.
+    /// Команда, пришедшая в тик, действует в этом же тике: удар входит в startup, уклонение уже сдвигает бойца,
+    /// каст скилла начинается.
     /// </summary>
     public sealed class FightSimulation
     {
@@ -53,7 +55,11 @@ namespace Game.Simulation
             StepFighter(s, 0, input0, canAct);
             StepFighter(s, 1, input1, canAct);
             ResolveBodies(s);
-            if (s.Phase == MatchPhase.Fight) ResolveHits(s);
+            if (s.Phase == MatchPhase.Fight)
+            {
+                ResolveHits(s);
+                StepObjects(s);
+            }
             AdvanceMatch(s);
         }
 
@@ -71,15 +77,59 @@ namespace Game.Simulation
             return atk == null ? AttackPhase.None : atk.PhaseAt(s.Fighters[fighter].StateTicks);
         }
 
-        public bool HasIFrames(GameState s, int fighter)
+        public SkillSpec CurrentSkill(GameState s, int fighter)
         {
             ref readonly var f = ref s.Fighters[fighter];
-            return f.State == ActionState.Dodge && f.StateTicks < Setup.Fighters[fighter].DodgeIFrameTicks;
+            return f.State == ActionState.Cast ? Setup.Fighters[fighter].Skill((int)f.CastSlot) : null;
+        }
+
+        public bool HasIFrames(GameState s, int fighter) => IsInvulnerable(s.Fighters[fighter], Setup.Fighters[fighter]);
+
+        /// <summary> Скилл готов: есть в слоте, перезарядка прошла, маны хватает. </summary>
+        public bool CanCast(GameState s, int fighter, int slot)
+        {
+            var sk = Setup.Fighters[fighter].Skill(slot);
+            ref readonly var f = ref s.Fighters[fighter];
+            return sk != null && f.Cooldown(slot) <= 0 && f.Mana >= sk.ManaCost;
+        }
+
+        /// <summary>
+        /// Куда уйдёт скилл с прицелом aim (направление × доля дальности; ноль — автоприцел) — тот же расчёт, что при
+        /// выходе скилла. Для индикатора прицела: игрок видит ровно то, что сделает симуляция.
+        /// </summary>
+        public FixVec2 PreviewAim(GameState s, int fighter, int slot, FixVec2 aim, out Fix distance)
+        {
+            var sk = Setup.Fighters[fighter].Skill(slot);
+            if (sk == null)
+            {
+                distance = Fix.Zero;
+                return FixVec2.Zero;
+            }
+            return ResolveAim(s, fighter, sk, aim.ClampMagnitude(Fix.One), out distance);
         }
 
         public static bool IsBufferable(CommandKind kind) =>
             kind == CommandKind.LightAttack || kind == CommandKind.HeavyAttack || kind == CommandKind.Dodge ||
-            kind == CommandKind.Parry || kind == CommandKind.BlockStart;
+            kind == CommandKind.Parry || kind == CommandKind.BlockStart || IsSkill(kind);
+
+        public static bool IsSkill(CommandKind kind) =>
+            kind == CommandKind.Skill1 || kind == CommandKind.Skill2 || kind == CommandKind.Ultimate;
+
+        public static int SlotOf(CommandKind kind) => kind switch
+        {
+            CommandKind.Skill1 => 0,
+            CommandKind.Skill2 => 1,
+            CommandKind.Ultimate => 2,
+            _ => -1,
+        };
+
+        public static CommandKind SkillCommand(int slot) => slot switch
+        {
+            0 => CommandKind.Skill1,
+            1 => CommandKind.Skill2,
+            2 => CommandKind.Ultimate,
+            _ => throw new ArgumentOutOfRangeException(nameof(slot), slot, "Слотов скиллов " + FighterSpec.SkillSlots),
+        };
 
         // ---------- Боец ----------
 
@@ -88,6 +138,12 @@ namespace Game.Simulation
             ref var f = ref s.Fighters[i];
             var spec = Setup.Fighters[i];
             Regenerate(ref f, spec);
+
+            // Прицел — непрерывный ввод, как джойстик: пока палец держит кнопку, боец свободен (бегает, бьёт), прицел
+            // только запоминается. Обновляется до команд, чтобы скилл, пришедший с отпусканием пальца, ушёл по нему.
+            if (canAct && input.Aim != AimState.None) f.SkillAim = input.AimVector.ClampMagnitude(Fix.One);
+            for (int k = 0; k < input.Count; k++)
+                if (input[k].Kind == CommandKind.SkillCancel) CancelCast(s, i, ref f, input[k], canAct);
 
             if (f.HitstopTicks > 0)
             {
@@ -98,7 +154,7 @@ namespace Game.Simulation
                 return;
             }
 
-            Advance(ref f, spec, canAct);
+            Advance(s, i, ref f, spec, canAct);
             f.MoveInput = canAct ? input.Move.ClampMagnitude(Fix.One) : FixVec2.Zero;
 
             if (canAct) TryBuffered(s, i, ref f, spec);
@@ -114,10 +170,13 @@ namespace Game.Simulation
             if (f.StaminaRegenDelay > 0) f.StaminaRegenDelay--;
             else if (f.Stamina < spec.MaxStamina) f.Stamina = Fix.Min(spec.MaxStamina, f.Stamina + spec.StaminaRegen);
             if (f.Mana < spec.MaxMana) f.Mana = Fix.Min(spec.MaxMana, f.Mana + spec.ManaRegen);
+            if (f.Cooldown0 > 0) f.Cooldown0--;
+            if (f.Cooldown1 > 0) f.Cooldown1--;
+            if (f.Cooldown2 > 0) f.Cooldown2--;
         }
 
-        /// <summary> Таймеры текущего состояния: выход из удара, оглушения, уклонения, парирования. </summary>
-        private static void Advance(ref FighterSim f, FighterSpec spec, bool canAct)
+        /// <summary> Таймеры текущего состояния: выход из удара, оглушения, уклонения, парирования; выход скилла. </summary>
+        private void Advance(GameState s, int i, ref FighterSim f, FighterSpec spec, bool canAct)
         {
             if (f.StateTicks < int.MaxValue) f.StateTicks++;
 
@@ -134,6 +193,9 @@ namespace Game.Simulation
                     if (f.StateTicks >= atk.TotalTicks) Enter(ref f, ActionState.Idle);
                     break;
                 }
+                case ActionState.Cast:
+                    AdvanceCast(s, i, ref f, spec);
+                    break;
                 case ActionState.Block:
                     if (f.StunTicks > 0) f.StunTicks--;
                     if (f.StunTicks == 0 && !f.BlockHeld) Enter(ref f, ActionState.Idle);
@@ -151,10 +213,46 @@ namespace Game.Simulation
                 case ActionState.ParryStunned:
                     if (--f.StunTicks <= 0) Enter(ref f, ActionState.Idle);
                     break;
+                case ActionState.GuardBroken:
+                    if (--f.StunTicks <= 0)
+                    {
+                        // Блок восстанавливается наполовину: иначе удерживающий блок ломался бы снова первым же ударом.
+                        f.Stamina = Fix.Max(f.Stamina, spec.MaxStamina / 2);
+                        Enter(ref f, ActionState.Idle);
+                    }
+                    break;
             }
 
             // Палец всё ещё держит блок (блок не успел начаться или его прервало оглушение) — возвращаемся в блок.
             if (canAct && f.State == ActionState.Idle && f.BlockHeld) EnterBlock(ref f);
+        }
+
+        /// <summary>
+        /// Каст: startup (боец поворачивается по прицелу) → выход скилла → recovery. Прицеливание идёт до каста
+        /// (палец на кнопке, боец свободен), поэтому каст не ждёт и сам по таймеру не выходит. Бежать можно всё время
+        /// каста (см. Integrate).
+        /// </summary>
+        private void AdvanceCast(GameState s, int i, ref FighterSim f, FighterSpec spec)
+        {
+            var sk = spec.Skill((int)f.CastSlot);
+            if (sk == null)
+            {
+                Enter(ref f, ActionState.Idle);
+                return;
+            }
+
+            if (!f.SkillFired)
+            {
+                if (f.StateTicks < sk.StartupTicks)
+                {
+                    var dir = ResolveAim(s, i, sk, f.SkillAim, out _);
+                    if (!dir.IsZero) f.Facing = dir;
+                    return;
+                }
+                FireSkill(s, i, ref f, spec, sk);
+                if (f.State != ActionState.Cast) return;
+            }
+            if (f.StateTicks >= sk.TotalTicks) Enter(ref f, ActionState.Idle);
         }
 
         private void TryBuffered(GameState s, int i, ref FighterSim f, FighterSpec spec)
@@ -176,6 +274,7 @@ namespace Game.Simulation
             {
                 case CommandKind.None:
                 case CommandKind.Restart:
+                case CommandKind.SkillCancel: // обработана до таймеров
                     return;
                 case CommandKind.BlockEnd:
                     HandleBlockEnd(s, i, ref f, cmd, canAct && !frozen);
@@ -199,7 +298,7 @@ namespace Game.Simulation
                 return;
             }
 
-            // Сейчас нельзя (recovery, оглушение, стоп-кадр) — запоминаем; новая команда вытесняет старую.
+            // Сейчас нельзя (recovery, оглушение, стоп-кадр, перезарядка вот-вот кончится) — запоминаем; новая команда вытесняет старую.
             if (IsBufferable(cmd.Kind) && spec.InputBufferTicks > 0)
             {
                 if (f.BufferTicks > 0) CommandEvent(s, SimEventType.CommandDropped, i, f.Buffered);
@@ -233,9 +332,28 @@ namespace Game.Simulation
             }
         }
 
+        /// <summary> Отмена каста до выхода скилла (и скилла, ждущего в буфере): мана и перезарядка не тратятся. </summary>
+        private void CancelCast(GameState s, int i, ref FighterSim f, SimCommand cmd, bool canAct)
+        {
+            bool cancelled = false;
+            if (canAct && f.State == ActionState.Cast && !f.SkillFired)
+            {
+                Enter(ref f, ActionState.Idle);
+                cancelled = true;
+            }
+            if (f.BufferTicks > 0 && IsSkill(f.Buffered.Kind))
+            {
+                CommandEvent(s, SimEventType.CommandDropped, i, f.Buffered);
+                f.BufferTicks = 0;
+                cancelled = true;
+            }
+            CommandEvent(s, cancelled ? SimEventType.CommandAccepted : SimEventType.CommandDropped, i, cmd);
+        }
+
         /// <summary> Попробовать выполнить команду в текущем состоянии. Правила отмен — здесь. </summary>
         private bool TryCommand(GameState s, int i, ref FighterSim f, FighterSpec spec, SimCommand cmd)
         {
+            bool isSkill = IsSkill(cmd.Kind);
             switch (f.State)
             {
                 case ActionState.Idle:
@@ -248,14 +366,18 @@ namespace Game.Simulation
                     var phase = atk.PhaseAt(f.StateTicks);
                     bool isAttack = cmd.Kind == CommandKind.LightAttack || cmd.Kind == CommandKind.HeavyAttack;
 
-                    // Комбо: попавший удар отменяется в следующий.
-                    if (isAttack && phase != AttackPhase.Startup && f.AttackConnected && atk.CancelOnHit)
-                        return TryAttack(s, i, ref f, spec, KindOf(cmd.Kind));
+                    // Комбо: попавший (или заблокированный) удар отменяется в следующий удар или в скилл.
+                    if (phase != AttackPhase.Startup && f.AttackConnected)
+                    {
+                        if (isAttack && atk.CancelOnHit) return TryAttack(s, i, ref f, spec, KindOf(cmd.Kind));
+                        if (isSkill) return TrySkill(s, i, ref f, spec, cmd);
+                    }
 
                     switch (phase)
                     {
                         // Startup — окно распознавания жеста: касание уже запустило удар, продолжение жеста его уточняет.
                         case AttackPhase.Startup:
+                            if (isSkill) return TrySkill(s, i, ref f, spec, cmd);
                             switch (cmd.Kind)
                             {
                                 case CommandKind.Dodge: return TryDodge(ref f, spec, cmd);
@@ -274,8 +396,22 @@ namespace Game.Simulation
                     return false;
                 }
 
+                case ActionState.Cast:
+                    // До выхода скилла каст бесплатно отменяется в оборону (как startup удара); после — только recovery-отмены.
+                    switch (cmd.Kind)
+                    {
+                        case CommandKind.Dodge: return TryDodge(ref f, spec, cmd);
+                        case CommandKind.Parry: EnterParry(ref f); return true;
+                        case CommandKind.BlockStart:
+                            if (f.SkillFired) return false;
+                            EnterBlock(ref f);
+                            return true;
+                    }
+                    return false;
+
                 case ActionState.Block:
                     if (f.StunTicks > 0) return false;
+                    if (isSkill) return TrySkill(s, i, ref f, spec, cmd);
                     switch (cmd.Kind)
                     {
                         case CommandKind.BlockStart: return true; // уже в блоке
@@ -313,6 +449,10 @@ namespace Game.Simulation
                     return true;
                 case CommandKind.Dodge:
                     return TryDodge(ref f, spec, cmd);
+                case CommandKind.Skill1:
+                case CommandKind.Skill2:
+                case CommandKind.Ultimate:
+                    return TrySkill(s, i, ref f, spec, cmd);
             }
             return false;
         }
@@ -353,6 +493,128 @@ namespace Game.Simulation
             if (f.Stamina < atk.StaminaCost) return false;
             Spend(ref f, spec, atk.StaminaCost);
             return true;
+        }
+
+        /// <summary> Начать каст: скилл есть, перезарядка прошла, маны хватает. Мана и перезарядка — при выходе скилла. </summary>
+        private bool TrySkill(GameState s, int i, ref FighterSim f, FighterSpec spec, SimCommand cmd)
+        {
+            int slot = SlotOf(cmd.Kind);
+            var sk = spec.Skill(slot);
+            if (sk == null || f.Cooldown(slot) > 0 || f.Mana < sk.ManaCost) return false;
+
+            Enter(ref f, ActionState.Cast);
+            f.CastSlot = (SkillSlot)slot;
+            f.BlockHeld = false;
+            // С кнопки: прицел пришёл непрерывным вводом (в тике отпускания пальца). Бот — прицел в команде.
+            if (!cmd.UsesInputAim) f.SkillAim = cmd.Direction.ClampMagnitude(Fix.One);
+
+            var dir = ResolveAim(s, i, sk, f.SkillAim, out _);
+            if (!dir.IsZero) f.Facing = dir;
+            if (sk.StartupTicks == 0) FireSkill(s, i, ref f, spec, sk);
+            return true;
+        }
+
+        /// <summary>
+        /// Направление и дальность скилла. Прицел — направление × доля дальности. Без прицела: на противника в пределах
+        /// дальности (если у скилла автоприцел), иначе по джойстику, иначе вперёд — на полную дальность.
+        /// </summary>
+        private FixVec2 ResolveAim(GameState s, int i, SkillSpec sk, FixVec2 aim, out Fix distance)
+        {
+            ref readonly var f = ref s.Fighters[i];
+            if (!aim.IsZero)
+            {
+                var m = aim.Magnitude;
+                distance = sk.Range * Fix.Min(m, Fix.One);
+                return aim / m;
+            }
+
+            if (sk.AutoAim)
+            {
+                ref readonly var foe = ref s.Fighters[1 - i];
+                var toFoe = foe.Position - f.Position;
+                if (foe.IsAlive && !toFoe.IsZero && toFoe.SqrMagnitude <= sk.Range * sk.Range)
+                {
+                    distance = toFoe.Magnitude;
+                    return toFoe / distance;
+                }
+            }
+
+            distance = sk.Range;
+            var move = f.MoveInput.Normalized;
+            return move.IsZero ? f.Facing : move;
+        }
+
+        /// <summary> Выход скилла: списать ману и запустить перезарядку, затем снаряд / телепорт / область. </summary>
+        private void FireSkill(GameState s, int i, ref FighterSim f, FighterSpec spec, SkillSpec sk)
+        {
+            int slot = (int)f.CastSlot;
+            if (f.Mana < sk.ManaCost)
+            {
+                Enter(ref f, ActionState.Idle); // не бывает при штатном ходе, но мана не может уйти в минус
+                return;
+            }
+            f.Mana -= sk.ManaCost;
+            f.SetCooldown(slot, sk.CooldownTicks);
+            f.SkillFired = true;
+
+            var dir = ResolveAim(s, i, sk, f.SkillAim, out var distance);
+            if (dir.IsZero) dir = f.Facing;
+            f.Facing = dir;
+            var arena = Setup.Arena;
+            FixVec2 at;
+
+            switch (sk.Kind)
+            {
+                case SkillKind.Projectile:
+                    at = f.Position + dir * spec.BodyRadius;
+                    Spawn(s, new SkillObject
+                    {
+                        Kind = SkillObjectKind.Projectile,
+                        Owner = i,
+                        Caster = i,
+                        Slot = f.CastSlot,
+                        Position = at,
+                        Velocity = dir * sk.ProjectileSpeed,
+                        TicksLeft = sk.ProjectileLifetimeTicks,
+                    });
+                    break;
+
+                case SkillKind.Blink:
+                    // Телепорт сквозь препятствия: в стену не встанешь — выталкивает к ближайшему краю.
+                    at = Collision.ResolveArena(f.Position + dir * distance, spec.BodyRadius, arena);
+                    f.Position = at;
+                    break;
+
+                case SkillKind.Zone:
+                    at = Collision.ClampToArena(f.Position + dir * distance, arena);
+                    Spawn(s, new SkillObject
+                    {
+                        Kind = SkillObjectKind.Zone,
+                        Owner = i,
+                        Caster = i,
+                        Slot = f.CastSlot,
+                        Position = at,
+                        TicksLeft = Math.Max(1, sk.ZoneDelayTicks),
+                    });
+                    break;
+
+                default:
+                    // Новый SkillKind без ветки здесь — ошибка кода, а не данных: молча делать из него другой скилл нельзя.
+                    throw new InvalidOperationException($"SkillKind {sk.Kind} ({sk.Name}) не реализован в FireSkill");
+            }
+            Emit(s, SimEventType.SkillFired, i, -1, Fix.Zero, 0, slot: slot, position: at);
+        }
+
+        private static void Spawn(GameState s, in SkillObject obj)
+        {
+            var objects = s.Objects;
+            for (int k = 0; k < objects.Length; k++)
+            {
+                if (objects[k].IsActive) continue;
+                objects[k] = obj;
+                return;
+            }
+            // Пул полон (12 объектов на арене не бывает при штатных перезарядках) — скилл тратится впустую.
         }
 
         private static bool TryDodge(ref FighterSim f, FighterSpec spec, SimCommand cmd)
@@ -397,13 +659,28 @@ namespace Game.Simulation
             f.AttackResolved = false;
             f.AttackConnected = false;
             f.DodgePaid = false;
+            f.SkillFired = false;
             if (!KeepsKnockback(state)) f.Velocity = FixVec2.Zero;
         }
 
         /// <summary> В этих состояниях отбрасывание доигрывает; в остальных боец стоит или движется сам. </summary>
         private static bool KeepsKnockback(ActionState state) =>
-            state == ActionState.Hitstun || state == ActionState.Block ||
+            state == ActionState.Hitstun || state == ActionState.Block || state == ActionState.GuardBroken ||
             state == ActionState.ParryStunned || state == ActionState.Dead;
+
+        /// <summary> Неуязвимость: начало уклонения или скилла с неуязвимостью (телепорт). </summary>
+        private static bool IsInvulnerable(in FighterSim f, FighterSpec spec)
+        {
+            switch (f.State)
+            {
+                case ActionState.Dodge:
+                    return f.StateTicks < spec.DodgeIFrameTicks;
+                case ActionState.Cast:
+                    var sk = spec.Skill((int)f.CastSlot);
+                    return sk != null && f.StateTicks < sk.InvulnerableTicks;
+            }
+            return false;
+        }
 
         private static void UpdateLocomotion(ref FighterSim f)
         {
@@ -419,6 +696,16 @@ namespace Game.Simulation
                     f.Position += f.MoveInput * spec.MoveSpeed;
                     var dir = f.MoveInput.Normalized;
                     if (!dir.IsZero) f.Facing = dir; // поворот мгновенный: отзывчивость важнее плавности
+                    break;
+                case ActionState.Attack:
+                    // Удар не останавливает бойца (касание правой зоны — всегда удар, даже если жест станет уклонением):
+                    // бег продолжается, но разворот — нет, хитбокс бьёт туда, куда смотрел боец в начале удара.
+                    f.Position += f.MoveInput * (spec.MoveSpeed * spec.Attack(f.Attack).MoveSpeedFactor);
+                    break;
+                case ActionState.Cast:
+                    // Каст тоже не отнимает управление: бег продолжается, смотрит боец по прицелу (см. AdvanceCast).
+                    var sk = spec.Skill((int)f.CastSlot);
+                    if (sk != null) f.Position += f.MoveInput * (spec.MoveSpeed * sk.MoveSpeedFactor);
                     break;
                 case ActionState.Dodge:
                     f.Position += f.DodgeDirection * spec.DodgeSpeed;
@@ -493,7 +780,7 @@ namespace Game.Simulation
 
             HitResult result;
             if (d.State == ActionState.Parry) result = HitResult.Parried;                       // высший приоритет
-            else if (d.State == ActionState.Dodge && d.StateTicks < dspec.DodgeIFrameTicks) result = HitResult.Evaded;
+            else if (IsInvulnerable(d, dspec)) result = HitResult.Evaded;
             else if (d.State == ActionState.Block) result = HitResult.Blocked;
             else result = HitResult.Hit;
             return new Contact(result, atk, f.StateTicks);
@@ -505,7 +792,6 @@ namespace Game.Simulation
             int di = 1 - a;
             ref var f = ref s.Fighters[a];
             ref var d = ref s.Fighters[di];
-            var dspec = Setup.Fighters[di];
             var atk = c.Attack;
             // Сколько тиков атакующему до свободы — для подсчёта преимущества по кадрам.
             int attackerBusy = atk.TotalTicks - c.AttackerTicks;
@@ -518,51 +804,136 @@ namespace Game.Simulation
                     f.StunTicks = Rules.ParryStunTicks;
                     Enter(ref d, ActionState.Idle);
                     f.HitstopTicks = d.HitstopTicks = Rules.ParryHitstopTicks;
-                    Emit(s, SimEventType.Parried, di, a, Fix.Zero, Rules.ParryStunTicks);
+                    Emit(s, SimEventType.Parried, di, a, Fix.Zero, Rules.ParryStunTicks, position: d.Position);
                     return;
 
                 case HitResult.Evaded:
                     f.AttackResolved = true;
-                    Emit(s, SimEventType.Evaded, a, di, Fix.Zero, 0);
+                    Emit(s, SimEventType.Evaded, a, di, Fix.Zero, 0, position: d.Position);
                     return;
 
                 case HitResult.Blocked:
-                {
                     f.AttackResolved = f.AttackConnected = true;
-                    var damage = atk.Damage * dspec.BlockDamageMultiplier;
-                    TakeDamage(ref d, damage);
-                    if (d.Health.Raw <= 0) // урон через блок тоже может добить
-                    {
-                        Kill(s, a, ref d, KnockDirection(f, d) * atk.KnockbackSpeed);
-                        return;
-                    }
-                    d.StunTicks = Math.Max(d.StunTicks, atk.BlockstunTicks);
-                    d.Velocity = KnockDirection(f, d) * (atk.KnockbackSpeed * dspec.BlockKnockbackMultiplier);
-                    f.HitstopTicks = d.HitstopTicks = atk.HitstopTicks;
-                    Emit(s, SimEventType.Blocked, a, di, damage, atk.BlockstunTicks - attackerBusy);
+                    LandBlock(s, a, atk.Hit, KnockDirection(f, d), attackerBusy, melee: true, slot: -1);
                     return;
-                }
 
                 case HitResult.Hit:
-                {
                     f.AttackResolved = f.AttackConnected = true;
-                    var knock = KnockDirection(f, d) * atk.KnockbackSpeed;
-                    TakeDamage(ref d, atk.Damage);
-                    f.HitstopTicks = atk.HitstopTicks;
-                    if (d.Health.Raw <= 0)
-                    {
-                        Emit(s, SimEventType.Hit, a, di, atk.Damage, 0);
-                        Kill(s, a, ref d, knock);
-                        return;
-                    }
-                    Enter(ref d, ActionState.Hitstun);
-                    d.StunTicks = atk.HitstunTicks;
-                    d.Velocity = knock;
-                    d.HitstopTicks = atk.HitstopTicks;
-                    Emit(s, SimEventType.Hit, a, di, atk.Damage, atk.HitstunTicks - attackerBusy);
+                    LandHit(s, a, atk.Hit, KnockDirection(f, d), attackerBusy, melee: true, slot: -1);
                     return;
-                }
             }
+        }
+
+        /// <summary>
+        /// Попадание по цели противника a. Серия: каждое следующее попадание, пока цель в hitstun, даёт меньше hitstun
+        /// (цель рано или поздно вырывается — даже у стены) и, начиная с ComboFullDamageHits, меньше урона.
+        /// melee — атакующий рядом и тоже получает стоп-кадр; снаряд и область его не останавливают.
+        /// </summary>
+        private void LandHit(GameState s, int a, in HitData hit, FixVec2 knockDir, int attackerBusy, bool melee, int slot, int caster = -1)
+        {
+            int di = 1 - a;
+            ref var f = ref s.Fighters[a];
+            ref var d = ref s.Fighters[di];
+
+            int n = d.State == ActionState.Hitstun ? d.ComboHits : 0;
+            var damage = hit.Damage * ComboDamageScale(n);
+            int hitstun = n == 0
+                ? hit.HitstunTicks
+                : Math.Min(hit.HitstunTicks, Math.Max(Rules.MinHitstunTicks, hit.HitstunTicks - Rules.HitstunDecayPerHit * n));
+            var knock = knockDir * hit.KnockbackSpeed;
+
+            DealDamage(s, a, damage);
+            if (melee) f.HitstopTicks = hit.HitstopTicks;
+            if (d.Health.Raw <= 0)
+            {
+                Emit(s, SimEventType.Hit, a, di, damage, 0, combo: n + 1, slot: slot, caster: caster, position: d.Position);
+                Kill(s, a, ref d, knock);
+                return;
+            }
+            Enter(ref d, ActionState.Hitstun);
+            d.StunTicks = hitstun;
+            d.Velocity = knock;
+            d.HitstopTicks = hit.HitstopTicks;
+            d.ComboHits = n + 1;
+            Emit(s, SimEventType.Hit, a, di, damage, hitstun - attackerBusy, combo: n + 1, slot: slot, caster: caster, position: d.Position);
+        }
+
+        /// <summary>
+        /// Удар в блок: часть урона проходит, а стамина защитника тратится. Кончилась — блок пробит: долгое оглушение.
+        /// Так бесконечный блок перестаёт быть ответом на всё, а тяжёлый удар получает роль «ломать оборону».
+        /// </summary>
+        private void LandBlock(GameState s, int a, in HitData hit, FixVec2 knockDir, int attackerBusy, bool melee, int slot, int caster = -1)
+        {
+            int di = 1 - a;
+            ref var f = ref s.Fighters[a];
+            ref var d = ref s.Fighters[di];
+            var dspec = Setup.Fighters[di];
+
+            var damage = hit.Damage * dspec.BlockDamageMultiplier;
+            DealDamage(s, a, damage);
+            if (d.Health.Raw <= 0) // урон через блок тоже может добить
+            {
+                Kill(s, a, ref d, knockDir * hit.KnockbackSpeed);
+                return;
+            }
+
+            if (hit.GuardDamage.Raw > 0)
+            {
+                d.Stamina -= hit.GuardDamage;
+                d.StaminaRegenDelay = dspec.StaminaRegenDelayTicks;
+            }
+            if (d.Stamina.Raw <= 0)
+            {
+                d.Stamina = Fix.Zero;
+                Enter(ref d, ActionState.GuardBroken);
+                d.StunTicks = Rules.GuardBreakStunTicks;
+                d.Velocity = knockDir * hit.KnockbackSpeed;
+                d.HitstopTicks = Rules.GuardBreakHitstopTicks;
+                if (melee) f.HitstopTicks = Rules.GuardBreakHitstopTicks;
+                Emit(s, SimEventType.GuardBreak, a, di, damage, Rules.GuardBreakStunTicks - attackerBusy, slot: slot, caster: caster, position: d.Position);
+                return;
+            }
+
+            d.StunTicks = Math.Max(d.StunTicks, hit.BlockstunTicks);
+            d.Velocity = knockDir * (hit.KnockbackSpeed * dspec.BlockKnockbackMultiplier);
+            d.HitstopTicks = hit.HitstopTicks;
+            if (melee) f.HitstopTicks = hit.HitstopTicks;
+            Emit(s, SimEventType.Blocked, a, di, damage, hit.BlockstunTicks - attackerBusy, slot: slot, caster: caster, position: d.Position);
+        }
+
+        private Fix ComboDamageScale(int hitIndex)
+        {
+            if (hitIndex < Rules.ComboFullDamageHits) return Fix.One;
+            var scale = Fix.One - Rules.ComboDamageScalePerHit * (hitIndex - Rules.ComboFullDamageHits + 1);
+            return Fix.Max(Rules.ComboMinDamageScale, scale);
+        }
+
+        /// <summary> Урон цели противника a и мана обоим: нанёсшему и получившему. </summary>
+        private void DealDamage(GameState s, int a, Fix amount)
+        {
+            ref var f = ref s.Fighters[a];
+            ref var d = ref s.Fighters[1 - a];
+            var aspec = Setup.Fighters[a];
+            var dspec = Setup.Fighters[1 - a];
+            TakeDamage(ref d, amount);
+            f.Mana = Fix.Min(aspec.MaxMana, f.Mana + amount * aspec.ManaPerDamageDealt);
+            if (d.IsAlive && d.Health.Raw > 0) d.Mana = Fix.Min(dspec.MaxMana, d.Mana + amount * dspec.ManaPerDamageTaken);
+        }
+
+        /// <summary> Сколько тиков бойцу до свободы (для подсчёта преимущества по кадрам). </summary>
+        private int BusyTicks(GameState s, int i)
+        {
+            ref readonly var f = ref s.Fighters[i];
+            var spec = Setup.Fighters[i];
+            switch (f.State)
+            {
+                case ActionState.Attack:
+                    return Math.Max(0, spec.Attack(f.Attack).TotalTicks - f.StateTicks);
+                case ActionState.Cast:
+                    var sk = spec.Skill((int)f.CastSlot);
+                    return sk == null ? 0 : Math.Max(0, sk.TotalTicks - f.StateTicks);
+            }
+            return 0;
         }
 
         private static FixVec2 KnockDirection(in FighterSim attacker, in FighterSim defender)
@@ -584,7 +955,118 @@ namespace Game.Simulation
             d.Velocity = knock;
             d.BlockHeld = false;
             d.BufferTicks = 0;
-            Emit(s, SimEventType.KO, killer, 1 - killer, Fix.Zero, 0);
+            d.ComboHits = 0;
+            Emit(s, SimEventType.KO, killer, 1 - killer, Fix.Zero, 0, position: d.Position);
+        }
+
+        // ---------- Снаряды и области ----------
+
+        private void StepObjects(GameState s)
+        {
+            var objects = s.Objects;
+            for (int k = 0; k < objects.Length; k++)
+            {
+                switch (objects[k].Kind)
+                {
+                    case SkillObjectKind.Projectile:
+                        StepProjectile(s, ref objects[k]);
+                        break;
+                    case SkillObjectKind.Zone:
+                        if (--objects[k].TicksLeft <= 0) Detonate(s, ref objects[k]);
+                        break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Снаряд за тик проходит отрезок: задел цель — попадание / блок / отражение парированием / пролёт сквозь
+        /// неуязвимость; задел препятствие или край арены — гаснет. Цель проверяется раньше препятствия.
+        /// </summary>
+        private void StepProjectile(GameState s, ref SkillObject o)
+        {
+            var sk = Setup.Fighters[o.Caster].Skill((int)o.Slot);
+            if (sk == null)
+            {
+                o = default;
+                return;
+            }
+            int caster = o.Caster;
+
+            var from = o.Position;
+            var to = from + o.Velocity;
+            int ti = 1 - o.Owner;
+            ref var d = ref s.Fighters[ti];
+            var dspec = Setup.Fighters[ti];
+
+            if (d.IsAlive && !o.Evaded && Collision.SegmentHitsCircle(from, to, d.Position, sk.ProjectileRadius + dspec.HurtRadius))
+            {
+                var knockDir = o.Velocity.Normalized;
+                if (d.State == ActionState.Parry && sk.Reflectable)
+                {
+                    // Отражение: снаряд разворачивается и становится снарядом парирующего, тот сразу свободен.
+                    int attacker = o.Owner;
+                    o.Owner = ti;
+                    o.Velocity = -o.Velocity;
+                    o.TicksLeft = sk.ProjectileLifetimeTicks;
+                    o.Evaded = false;
+                    Enter(ref d, ActionState.Idle);
+                    d.HitstopTicks = Rules.ReflectHitstopTicks;
+                    Emit(s, SimEventType.ProjectileReflected, ti, attacker, Fix.Zero, 0, slot: (int)o.Slot, caster: caster, position: from);
+                    return;
+                }
+                if (IsInvulnerable(d, dspec))
+                {
+                    o.Evaded = true;
+                    Emit(s, SimEventType.Evaded, o.Owner, ti, Fix.Zero, 0, slot: (int)o.Slot, caster: caster, position: d.Position);
+                }
+                else
+                {
+                    int owner = o.Owner;
+                    int slot = (int)o.Slot;
+                    o = default;
+                    if (d.State == ActionState.Block || d.State == ActionState.Parry)
+                        LandBlock(s, owner, sk.Hit, knockDir, BusyTicks(s, owner), melee: false, slot: slot, caster: caster);
+                    else
+                        LandHit(s, owner, sk.Hit, knockDir, BusyTicks(s, owner), melee: false, slot: slot, caster: caster);
+                    return;
+                }
+            }
+
+            if (!Collision.InsideArena(to, Setup.Arena) || Collision.SegmentBlocked(from, to, Setup.Arena) || --o.TicksLeft <= 0)
+            {
+                Emit(s, SimEventType.ProjectileExpired, o.Owner, -1, Fix.Zero, 0, slot: (int)o.Slot, caster: caster, position: to);
+                o = default;
+                return;
+            }
+            o.Position = to;
+        }
+
+        /// <summary> Взрыв области: цель в радиусе получает удар; блок и парирование только блокируют, неуязвимость спасает. </summary>
+        private void Detonate(GameState s, ref SkillObject o)
+        {
+            int owner = o.Owner;
+            int slot = (int)o.Slot;
+            var center = o.Position;
+            var sk = Setup.Fighters[o.Caster].Skill(slot);
+            o = default;
+            Emit(s, SimEventType.ZoneDetonated, owner, -1, Fix.Zero, 0, slot: slot, position: center);
+            if (sk == null) return;
+
+            int ti = 1 - owner;
+            ref var d = ref s.Fighters[ti];
+            var dspec = Setup.Fighters[ti];
+            if (!d.IsAlive || !Collision.CirclesOverlap(center, sk.ZoneRadius, d.Position, dspec.HurtRadius)) return;
+
+            var knockDir = (d.Position - center).Normalized;
+            if (knockDir.IsZero) knockDir = (d.Position - s.Fighters[owner].Position).Normalized;
+            if (knockDir.IsZero) knockDir = s.Fighters[owner].Facing;
+
+            if (IsInvulnerable(d, dspec))
+                Emit(s, SimEventType.Evaded, owner, ti, Fix.Zero, 0, slot: slot, position: d.Position);
+            else if (d.State == ActionState.Block || d.State == ActionState.Parry)
+                LandBlock(s, owner, sk.Hit, knockDir, BusyTicks(s, owner), melee: false, slot: slot);
+            else
+                LandHit(s, owner, sk.Hit, knockDir, BusyTicks(s, owner), melee: false, slot: slot);
         }
 
         // ---------- Матч ----------
@@ -602,6 +1084,7 @@ namespace Game.Simulation
             s.RoundTicksLeft = Rules.RoundTicks;
             s.LastRoundWinner = -1;
             for (int i = 0; i < GameState.FighterCount; i++) ResetFighter(ref s.Fighters[i], i);
+            Array.Clear(s.Objects, 0, s.Objects.Length);
 
             if (Rules.CountdownTicks > 0)
             {
@@ -628,8 +1111,10 @@ namespace Game.Simulation
                 State = ActionState.Idle,
                 Health = spec.MaxHealth,
                 Stamina = spec.MaxStamina,
-                Mana = spec.MaxMana,
+                Mana = Fix.Min(spec.MaxMana, spec.StartMana),
             };
+            for (int slot = 0; slot < FighterSpec.SkillSlots; slot++)
+                f.SetCooldown(slot, spec.Skill(slot)?.InitialCooldownTicks ?? 0);
         }
 
         private void AdvanceMatch(GameState s)
@@ -700,7 +1185,8 @@ namespace Game.Simulation
 
         // ---------- События ----------
 
-        private void Emit(GameState s, SimEventType type, int actor, int target, Fix amount, int advantage, int winner = -1)
+        private void Emit(GameState s, SimEventType type, int actor, int target, Fix amount, int advantage, int winner = -1,
+                          int combo = 0, int slot = -1, int caster = -1, FixVec2 position = default)
         {
             Events.Add(new SimEvent
             {
@@ -711,6 +1197,10 @@ namespace Game.Simulation
                 Amount = amount,
                 FrameAdvantage = advantage,
                 Winner = winner,
+                Combo = combo,
+                Slot = slot,
+                Caster = slot >= 0 && caster < 0 ? actor : caster,
+                Position = position,
             });
         }
 
@@ -725,6 +1215,8 @@ namespace Game.Simulation
                 Command = cmd.Kind,
                 CommandId = cmd.Id,
                 Winner = -1,
+                Slot = SlotOf(cmd.Kind),
+                Caster = SlotOf(cmd.Kind) >= 0 ? fighter : -1,
             });
         }
     }

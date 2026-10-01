@@ -9,7 +9,7 @@ namespace Game.UI
     /// Собирает арену и бойцов из данных симуляции:
     ///   - MatchRunner (симуляция боя) с параметрами бойцов;
     ///   - пол, стены по краям и препятствия — по ArenaSpec (геометрия в мире совпадает с коллизиями симуляции);
-    ///   - виды двух бойцов (из префабов или процедурно: капсула + диск хитбокса);
+    ///   - виды двух бойцов (из префабов или процедурно: капсула + диск хитбокса), снарядов/областей и прицела скилла;
     ///   - камеру MobaCamera на своём бойце и свет.
     /// Физики Unity здесь нет: коллайдеры примитивов удаляются, всё движение и столкновения — в симуляции.
     /// Уже существующие объекты (свет, пол, камера) переиспользуются, поэтому повторный вызов безопасен.
@@ -33,14 +33,16 @@ namespace Game.UI
             public MatchRunner Runner;
             public readonly FighterView[] Views = new FighterView[GameState.FighterCount];
             public MobaCamera Camera;
+            public SkillObjectsView SkillObjects;
+            public SkillAimIndicator AimIndicator;
 
             public FighterView Local => Views[Runner.LocalPlayer];
             public FighterView Opponent => Views[Runner.Opponent];
         }
 
+        /// <summary> Вид бойца — из его <see cref="FighterDefinition.ViewPrefab"/> (пусто — капсула). </summary>
         public static Result Build(FighterDefinition player = null, FighterDefinition opponent = null, int localPlayer = 0,
-                                   BotMode botMode = BotMode.Idle, bool training = false,
-                                   FighterView playerViewPrefab = null, FighterView opponentViewPrefab = null)
+                                   BotMode botMode = BotMode.Idle, bool training = false)
         {
             var result = new Result();
             EnsureLight();
@@ -56,9 +58,16 @@ namespace Game.UI
             for (int i = 0; i < GameState.FighterCount; i++)
             {
                 bool local = i == runner.LocalPlayer;
-                var prefab = local ? playerViewPrefab : opponentViewPrefab;
+                var prefab = ViewPrefab(runner.Definition(i));
                 result.Views[i] = CreateView(runner, i, prefab, local ? PlayerColor : OpponentColor, local ? "Player" : "Opponent");
             }
+
+            var colors = new Color[GameState.FighterCount];
+            for (int i = 0; i < colors.Length; i++) colors[i] = i == runner.LocalPlayer ? PlayerColor : OpponentColor;
+            result.SkillObjects = new GameObject("_SkillObjects").AddComponent<SkillObjectsView>();
+            result.SkillObjects.Bind(runner, colors);
+            result.AimIndicator = new GameObject("_SkillAim").AddComponent<SkillAimIndicator>();
+            result.AimIndicator.Bind(runner);
 
             result.Camera = EnsureMainCamera(result.Local.transform, runner.LocalPlayer);
             return result;
@@ -75,6 +84,14 @@ namespace Game.UI
         }
 
         // ---------- Бойцы ----------
+
+        private static FighterView ViewPrefab(FighterDefinition definition)
+        {
+            if (definition == null || definition.ViewPrefab == null) return null;
+            var view = definition.ViewPrefab.GetComponent<FighterView>();
+            if (view == null) Debug.LogWarning($"{definition.name}: у ViewPrefab нет FighterView — будет капсула", definition);
+            return view;
+        }
 
         public static FighterView CreateView(MatchRunner runner, int index, FighterView prefab, Color color, string name)
         {

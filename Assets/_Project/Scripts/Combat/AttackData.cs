@@ -41,6 +41,12 @@ namespace Game.Combat
         [Header("Cost")]
         [Tooltip("Стамина за удар; списывается при выходе хитбокса, поэтому отмена в startup бесплатна.")]
         [Min(0f)] public float StaminaCost = 0f;
+        [Tooltip("Сколько стамины удар выбивает из блока; стамина кончилась — блок пробит.")]
+        [Min(0f)] public float GuardDamage = 6f;
+
+        [Header("Movement")]
+        [Tooltip("Доля скорости бега во время удара: 1 — удар не тормозит, 0 — боец встаёт на месте.")]
+        [Range(0f, 1f)] public float MoveSpeedFactor = 1f;
 
         [Header("Cancel rules")]
         [Tooltip("После попадания или блока active/recovery отменяются следующим ударом (комбо).")]
@@ -65,9 +71,11 @@ namespace Game.Combat
             BlockstunTicks = SimTime.Frames(BlockstunFrames),
             HitstopTicks = SimTime.Frames(HitstopFrames),
             StaminaCost = Fix.FromFloat(StaminaCost),
+            GuardDamage = Fix.FromFloat(GuardDamage),
             CancelOnHit = CanCancelOnHit,
             HitOffset = Fix.FromFloat(HitboxOffset),
             HitRadius = Fix.FromFloat(HitboxRadius),
+            MoveSpeedFactor = Fix.FromFloat(MoveSpeedFactor),
         };
     }
 }

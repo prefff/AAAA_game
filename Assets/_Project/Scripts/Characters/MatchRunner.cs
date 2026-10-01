@@ -52,6 +52,11 @@ namespace Game.Characters
         private double _accumulator;
         private Vector2 _moveScreen;
         private ushort _nextCommandId = 1;
+        // Прицел скилла (мировой, направление × доля дальности): держится, пока палец на кнопке; отпускание
+        // уходит в ближайший тик, даже если палец уже снова на экране.
+        private Vector2 _aim;
+        private bool _aimHeld;
+        private bool _aimReleasePending;
 
         private readonly List<PendingCommand> _pending = new();
         private readonly Dictionary<ushort, PendingCommand> _inFlight = new();
@@ -63,6 +68,11 @@ namespace Game.Characters
         private int _replayIndex;
 
         public FightSimulation Sim => _sim;
+        /// <summary> Данные бойцов (имена, подписи скиллов) — для интерфейса; в бою используется Sim.Setup. </summary>
+        public FighterDefinition LocalDefinition { get; private set; }
+        public FighterDefinition OpponentDefinition { get; private set; }
+        /// <summary> Данные бойца по индексу в симуляции. </summary>
+        public FighterDefinition Definition(int index) => index == _localPlayer ? LocalDefinition : OpponentDefinition;
         public GameState State => _state;
         public StateHistory History => _history;
         public int LocalPlayer => _localPlayer;
@@ -73,6 +83,11 @@ namespace Game.Characters
         public float TickProgress => (float)Math.Max(0.0, Math.Min(1.0, _accumulator / SimTime.TickSeconds));
 
         public BotMode BotMode { get => _botMode; set { _botMode = value; _replaying = false; } }
+        /// <summary> Прицел локального игрока, пока палец держит кнопку скилла (для индикатора). </summary>
+        public bool IsAiming => _aimHeld;
+        public Vector2 AimInput => _aim;
+        public int AimSlot { get; private set; } = -1;
+        public bool AimInCancelZone { get; private set; }
         public bool IsRecording => _recording;
         public bool IsReplaying => _replaying;
         public int RecordedTicks => _recorded.Count;
@@ -107,6 +122,8 @@ namespace Game.Characters
         {
             var p = _player != null ? _player : FighterDefinition.LoadOrDefault();
             var o = _opponent != null ? _opponent : p;
+            LocalDefinition = p;
+            OpponentDefinition = o;
             var setup = new SimSetup();
             setup.Fighters[_localPlayer] = p.ToSpec();
             setup.Fighters[1 - _localPlayer] = o.ToSpec();
@@ -121,6 +138,7 @@ namespace Game.Characters
         {
             EventBus.Subscribe<CommandInputEvent>(this, OnCommand);
             EventBus.Subscribe<MoveInputEvent>(this, OnMove);
+            EventBus.Subscribe<SkillAimInputEvent>(this, OnSkillAim);
             _accumulator = 0.0;
         }
 
@@ -129,6 +147,7 @@ namespace Game.Characters
             EventBus.UnsubscribeAll(this);
             _pending.Clear();
             _moveScreen = Vector2.zero;
+            _aimHeld = _aimReleasePending = false;
         }
 
         // ---------- Управление тренировкой ----------
@@ -164,12 +183,25 @@ namespace Game.Characters
 
         private void OnMove(MoveInputEvent e) => _moveScreen = e.Direction;
 
+        private void OnSkillAim(SkillAimInputEvent e)
+        {
+            _aim = e.Aim;
+            AimSlot = e.Slot;
+            AimInCancelZone = e.InCancelZone;
+            bool held = e.Phase == SkillAimPhase.Held;
+            if (_aimHeld && !held) _aimReleasePending = true;
+            _aimHeld = held;
+        }
+
         private void OnCommand(CommandInputEvent e)
         {
             var c = e.Command;
             var kind = ToKind(c.Type);
             if (kind == CommandKind.None) return;
-            var cmd = SimCommand.Of(kind, c.Direction.x, c.Direction.y);
+            // Кнопка скилла: прицел пришёл непрерывным вводом (TickInput.Aim, отпускание — в этом же тике).
+            var cmd = FightSimulation.IsSkill(kind)
+                ? SimCommand.SkillWithInputAim(kind)
+                : SimCommand.Of(kind, c.Direction.x, c.Direction.y);
             Enqueue(cmd, c.Type.ToString(), c.InputTime, c.RecognizedTime);
         }
 
@@ -194,7 +226,10 @@ namespace Game.Characters
             CommandType.BlockEnd => CommandKind.BlockEnd,
             CommandType.Parry => CommandKind.Parry,
             CommandType.Dodge => CommandKind.Dodge,
-            _ => CommandKind.None, // скиллы — этап 6
+            CommandType.Ability1 => CommandKind.Skill1,
+            CommandType.Ability2 => CommandKind.Skill2,
+            CommandType.Ultimate => CommandKind.Ultimate,
+            _ => CommandKind.None,
         };
 
         // ---------- Тик ----------
@@ -236,7 +271,8 @@ namespace Game.Characters
             for (int i = 0; i < events.Count; i++)
             {
                 var e = events[i];
-                if (e.Type == SimEventType.Hit || e.Type == SimEventType.Blocked || e.Type == SimEventType.Parried)
+                if (e.Type == SimEventType.Hit || e.Type == SimEventType.Blocked || e.Type == SimEventType.Parried ||
+                    e.Type == SimEventType.GuardBreak)
                 {
                     LastContact = e;
                     HasContact = true;
@@ -251,6 +287,9 @@ namespace Game.Characters
             var input = new TickInput();
             var move = _moveScreen.sqrMagnitude > 1e-6f ? InputSpace.ScreenToWorld(_moveScreen) : Vector2.zero; // длина (аналог) сохраняется
             input.SetMove(move.x, move.y);
+            if (_aimHeld) input.SetAim(AimState.Held, _aim.x, _aim.y);
+            else if (_aimReleasePending) input.SetAim(AimState.Released, _aim.x, _aim.y);
+            _aimReleasePending = false;
 
             // Команда, пропавшая без события (буфер сброшен KO или новым раундом), не должна копиться вечно.
             if (_inFlight.Count > 64) _inFlight.Clear();
@@ -279,12 +318,16 @@ namespace Game.Characters
         /// <summary> Стороны арены зеркальны (точечная симметрия): поворачиваем направления на 180°. </summary>
         private static TickInput Mirror(TickInput src)
         {
-            var dst = new TickInput { MoveX = (sbyte)-src.MoveX, MoveY = (sbyte)-src.MoveY };
+            var dst = new TickInput
+            {
+                MoveX = (sbyte)-src.MoveX, MoveY = (sbyte)-src.MoveY,
+                AimX = (sbyte)-src.AimX, AimY = (sbyte)-src.AimY, Aim = src.Aim,
+            };
             for (int i = 0; i < src.Count; i++)
             {
                 var c = src[i];
                 if (c.Kind == CommandKind.Restart) continue;
-                dst.Add(new SimCommand(c.Kind, (sbyte)-c.DirX, (sbyte)-c.DirY));
+                dst.Add(c.UsesInputAim ? c : new SimCommand(c.Kind, (sbyte)-c.DirX, (sbyte)-c.DirY));
             }
             return dst;
         }

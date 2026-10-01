@@ -275,10 +275,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: fde2d9f78d5b0c2439735558ea242ab3, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Game.UI::Game.UI.ArenaBootstrap
-  _player: {fileID: 0}
-  _opponent: {fileID: 0}
-  _playerView: {fileID: 0}
-  _opponentView: {fileID: 0}
+  _player: {fileID: 11400000, guid: 87ed31343bade6641a19f5ea44ad8621, type: 2}
+  _opponent: {fileID: 11400000, guid: 87ed31343bade6641a19f5ea44ad8621, type: 2}
   _localPlayerIndex: 0
   _botMode: 0
   _training: 0

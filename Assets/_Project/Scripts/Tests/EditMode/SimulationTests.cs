@@ -473,6 +473,36 @@ namespace Game.Tests
         }
 
         [Test]
+        public void Attack_WhileRunning_KeepsMoving_ButNotTurning()
+        {
+            var h = new SimHarness(SimHarness.Duel(6f));
+            h.Tick(SimHarness.Move(1f, 0f));
+            var cmd = SimHarness.Cmd(CommandKind.LightAttack);
+            cmd.SetMove(1f, 0f);
+            h.Tick(cmd);
+            Assert.AreEqual(ActionState.Attack, h.P0.State);
+            var facing = h.P0.Facing;
+            var before = h.P0.Position;
+            for (int i = 0; i < 10; i++) h.Tick(SimHarness.Move(0f, -1f));
+            Assert.AreEqual(ActionState.Attack, h.P0.State);
+            Assert.AreEqual(h.Spec0.MoveSpeed.ToFloat() * 10f, (before - h.P0.Position).Y.ToFloat(), 1e-2f,
+                "Удар не тормозит бег");
+            Assert.AreEqual(facing, h.P0.Facing, "Во время удара боец не разворачивается");
+        }
+
+        [Test]
+        public void Attack_MoveSpeedFactorZero_RootsInPlace()
+        {
+            var setup = SimHarness.Duel(6f);
+            setup.Fighters[0].Light.MoveSpeedFactor = Fix.Zero;
+            var h = new SimHarness(setup);
+            h.Tick(SimHarness.Cmd(CommandKind.LightAttack));
+            var before = h.P0.Position;
+            for (int i = 0; i < 5; i++) h.Tick(SimHarness.Move(1f, 0f));
+            Assert.AreEqual(before, h.P0.Position);
+        }
+
+        [Test]
         public void AcceptedCommand_ReportsItsId()
         {
             var h = new SimHarness(SimHarness.Duel());

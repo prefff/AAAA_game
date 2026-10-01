@@ -1,0 +1,36 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 82452e86adaba1f4fb3302d92fa58da9, type: 3}
+  m_Name: Skill_Blink
+  m_EditorClassIdentifier: Game.Combat::Game.Combat.SkillData
+  DisplayName: "\u0421\u043A\u0430\u0447\u043E\u043A"
+  ShortName: "\u0421\u043A\u0430\u0447\u043E\u043A"
+  Kind: 1
+  StartupFrames: 4
+  RecoveryFrames: 10
+  InvulnerableFrames: 8
+  ManaCost: 25
+  CooldownSeconds: 6
+  InitialCooldownSeconds: 0
+  Range: 4.5
+  AutoAim: 0
+  ProjectileSpeed: 16
+  ProjectileRadius: 0.35
+  Reflectable: 1
+  ZoneRadius: 2.5
+  ZoneDelayFrames: 30
+  Damage: 0
+  Knockback: 0
+  HitstunFrames: 0
+  BlockstunFrames: 0
+  HitstopFrames: 0
+  GuardDamage: 0

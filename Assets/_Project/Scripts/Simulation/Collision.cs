@@ -73,6 +73,12 @@
             b += normal * (overlap - halfOverlap);
         }
 
+        public static bool InsideArena(FixVec2 p, ArenaSpec arena) =>
+            p.X >= arena.Min.X && p.X <= arena.Max.X && p.Y >= arena.Min.Y && p.Y <= arena.Max.Y;
+
+        public static FixVec2 ClampToArena(FixVec2 p, ArenaSpec arena) =>
+            new(Fix.Clamp(p.X, arena.Min.X, arena.Max.X), Fix.Clamp(p.Y, arena.Min.Y, arena.Max.Y));
+
         public static bool CirclesOverlap(FixVec2 a, Fix ra, FixVec2 b, Fix rb)
         {
             var r = ra + rb;
@@ -95,7 +101,8 @@
             return false;
         }
 
-        private static bool SegmentHitsCircle(FixVec2 a, FixVec2 b, FixVec2 c, Fix r)
+        /// <summary> Задевает ли отрезок a→b круг (c, r): снаряд за тик не проскочит цель насквозь. </summary>
+        public static bool SegmentHitsCircle(FixVec2 a, FixVec2 b, FixVec2 c, Fix r)
         {
             var ab = b - a;
             var lenSq = ab.SqrMagnitude;

@@ -24,4 +24,5 @@ MonoBehaviour:
   HitboxOffset: 1.1
   HitboxRadius: 0.7
   StaminaCost: 25
+  GuardDamage: 28
   CanCancelOnHit: 0
