@@ -1,0 +1,46 @@
+{
+	"mcpServers": {
+		"unity": {
+			"command": "unity",
+			"args": [
+				"mcp",
+				"--project-path",
+				"c:/Users/goddammit/Desktop/game/AAAA_game"
+			],
+			"alwaysAllow": [
+				"recompile",
+				"editor_play",
+				"get_scene_hierarchy",
+				"console",
+				"get_serialized_fields",
+				"get_component_properties",
+				"editor_stop",
+				"wait_for",
+				"wait_status",
+				"find_gameobjects",
+				"eval",
+				"editor_status",
+				"recompile_status",
+				"console_status",
+				"set_transform",
+				"capture_game_view",
+				"menu",
+				"run_script",
+				"open_scene",
+				"set_layer",
+				"save_scene",
+				"clear_console",
+				"create_gameobject",
+				"attach_script",
+				"add_component",
+				"set_component_properties",
+				"delete_asset",
+				"delete_gameobject",
+				"get_authoring_root",
+				"read_text_file",
+				"write_text_file",
+				"list_open_scenes"
+			]
+		}
+	}
+}
