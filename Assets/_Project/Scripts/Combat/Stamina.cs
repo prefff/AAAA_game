@@ -55,5 +55,21 @@ namespace Game.Combat
             OnStaminaChanged?.Invoke(Normalized);
             return true;
         }
+
+        /// <summary> Вернуть часть стамины (отмена действия, за которое уже заплатили). Задержку регенерации не трогает. </summary>
+        public void Restore(float amount)
+        {
+            if (amount <= 0f) return;
+            _current = Mathf.Min(_max, _current + amount);
+            OnStaminaChanged?.Invoke(Normalized);
+        }
+
+        /// <summary> Восстановить стамину до максимума (респаун, начало раунда). </summary>
+        public void ResetStamina()
+        {
+            _current = _max;
+            _regenCooldown = 0f;
+            OnStaminaChanged?.Invoke(Normalized);
+        }
     }
 }

@@ -32,7 +32,7 @@ namespace Game.Combat
             _current = _maxHealth;
         }
 
-        public void TakeDamage(float amount, GameObject attacker, Vector3 hitPoint)
+        public void TakeDamage(float amount, AttackData attack, GameObject attacker, Vector3 hitPoint)
         {
             if (!IsAlive || amount <= 0f) return;
 

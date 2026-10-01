@@ -2,6 +2,7 @@
 using Game.Combat;
 using Game.Core;
 using Game.Input;
+using Game.Simulation;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
@@ -9,15 +10,25 @@ using UnityEngine.UI;
 namespace Game.UI
 {
     /// <summary>
-    /// Автоматически собирает UI на старте сцены: Canvas + EventSystem + виртуальный джойстик + HUD.
-    /// Также добавляет GestureRecognizer и TouchInputProvider, если их нет на сцене.
-    /// Один компонент на сцену — экономит 90% ручной возни с UI.
+    /// Собирает сцену боя на старте: арена и бойцы (<see cref="ArenaBuilder"/>), Canvas, джойстик, HUD бойцов и матча,
+    /// индикатор противника за краем экрана, распознаватель жестов и оверлей разработчика.
+    /// Один компонент на сцену.
     /// </summary>
     public class ArenaBootstrap : MonoBehaviour
     {
-        [Header("Local player")]
-        [Tooltip("Локальный игрок (Fighter). Если null — найдём по IsLocalPlayer.")]
-        [SerializeField] private Fighter _localPlayer;
+        [Header("Бойцы")]
+        [Tooltip("Пусто — Resources/Fighters/Fighter_Default.")]
+        [SerializeField] private FighterDefinition _player;
+        [SerializeField] private FighterDefinition _opponent;
+        [Tooltip("Префабы видов (необязательно): пусто — капсулы собираются процедурно.")]
+        [SerializeField] private FighterView _playerView;
+        [SerializeField] private FighterView _opponentView;
+        [Tooltip("Каким бойцом управляет этот телефон: 0 — синяя сторона, 1 — красная (камера развёрнута).")]
+        [SerializeField, Range(0, 1)] private int _localPlayerIndex;
+
+        [Header("Тренировка")]
+        [SerializeField] private BotMode _botMode = BotMode.Idle;
+        [SerializeField] private bool _training;
 
         [Header("UI tuning")]
         [SerializeField] private Vector2 _joystickAnchor = new(180f, 180f);
@@ -27,13 +38,22 @@ namespace Game.UI
         [SerializeField] private float _hpBarHeight = 24f;
 
         [Header("Performance")]
-        [Tooltip("Целевой FPS. 0 = использовать частоту обновления экрана (60/90/120 Гц).")]
+        [Tooltip("Целевой FPS. 0 = максимальная частота экрана (60/90/120 Гц).")]
         [SerializeField] private int _targetFps = 0;
+        [Tooltip("Принудительно отключить VSync. По умолчанию VSync сохраняется — предпочтительно для мобилок и редактора.")]
+        [SerializeField] private bool _disableVSync = false;
+
+        [Header("Diagnostics")]
+        [Tooltip("Оверлей задержки ввода, состояния бойца, преимущества по кадрам и панель тренировки.")]
+        [SerializeField] private bool _latencyOverlay = true;
+
+        private ArenaBuilder.Result _arena;
+
+        public ArenaBuilder.Result Arena => _arena;
 
         private void Awake()
         {
             // Принудительно landscape — страховка на случай, если Player Settings вдруг сбросились.
-            // На мобиле зафиксирует ориентацию; в редакторе не повлияет (Screen.orientation там игнорируется).
             Screen.orientation = ScreenOrientation.LandscapeLeft;
             Screen.autorotateToLandscapeLeft = true;
             Screen.autorotateToLandscapeRight = true;
@@ -41,53 +61,29 @@ namespace Game.UI
             Screen.autorotateToPortraitUpsideDown = false;
 
             // Снимаем дефолтный 30 FPS на мобилках, используем максимальную частоту экрана.
-            FrameRateBooster.Apply(_targetFps);
+            FrameRateBooster.Apply(_targetFps, _disableVSync);
 
-            // Процедурно строим сцену (Player/Dummy/Floor/Camera/Light) — если чего-то нет,
-            // создаёт само. Сцена в репо может быть почти пустой — арена сгенерируется в рантайме.
-            ArenaBuilder.Build(addOnlyMissing: true);
-
-            if (_localPlayer == null) _localPlayer = FindLocalPlayer();
+            _arena = ArenaBuilder.Build(_player, _opponent, _localPlayerIndex, _botMode, _training, _playerView, _opponentView);
 
             EnsureEventSystem();
             var canvas = CreateCanvas();
             CreateJoystick(canvas.transform);
-            if (_localPlayer != null) CreateHud(canvas.transform);
+            CreateHud(canvas.transform);
+            CreateMatchHud(canvas.transform);
+            CreateOffscreenIndicator(canvas.transform);
             EnsureGestureBackend();
-            AttachHealthBarsToDummies();
-        }
-
-        /// <summary>
-        /// Каждому объекту с Health (кроме локального игрока — у него уже screen-HUD)
-        /// добавляем WorldSpaceHealthBar. Так полоска появится над любой мишенью —
-        /// Capsule, DummyTarget, любой враг — главное чтобы был Health.
-        /// </summary>
-        private void AttachHealthBarsToDummies()
-        {
-            var healths = FindObjectsByType<Health>(FindObjectsSortMode.None);
-            var localHealth = _localPlayer != null ? _localPlayer.Health : null;
-            foreach (var h in healths)
-            {
-                if (h == null) continue;
-                if (h == localHealth) continue; // не дублируем HUD локального игрока
-
-                // Health может быть на дочернем объекте — вешаем бар на корень (выглядит естественнее).
-                var host = h.transform.root != null ? h.transform.root.gameObject : h.gameObject;
-                if (host.GetComponent<WorldSpaceHealthBar>() == null)
-                    host.AddComponent<WorldSpaceHealthBar>();
-            }
+            if (_latencyOverlay) CreateLatencyOverlay();
         }
 
         // ---------- UI ----------
 
-        private void EnsureEventSystem()
+        private static void EnsureEventSystem()
         {
             if (FindAnyObjectByType<EventSystem>() != null) return;
-            var go = new GameObject("EventSystem", typeof(EventSystem), typeof(StandaloneInputModule));
-            // Чтобы тач корректно работал и в редакторе через мышь, StandaloneInputModule достаточно.
+            _ = new GameObject("EventSystem", typeof(EventSystem), typeof(StandaloneInputModule));
         }
 
-        private Canvas CreateCanvas()
+        private static Canvas CreateCanvas()
         {
             var go = new GameObject("HUD_Canvas", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
             var canvas = go.GetComponent<Canvas>();
@@ -97,176 +93,105 @@ namespace Game.UI
             var scaler = go.GetComponent<CanvasScaler>();
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
             scaler.referenceResolution = new Vector2(1920f, 1080f);
-            // Match by width — для landscape-онли UI это даёт стабильный масштаб на разных
-            // плотностях пикселей: HUD и джойстик скейлятся пропорционально ширине экрана.
+            // Match by width — стабильный масштаб landscape-UI на разных плотностях пикселей.
             scaler.matchWidthOrHeight = 0f;
             return canvas;
         }
 
         private void CreateJoystick(Transform parent)
         {
-            // Фон джойстика
-            var bgGo = new GameObject("Joystick_BG", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
-            bgGo.transform.SetParent(parent, false);
-            var bgRT = (RectTransform)bgGo.transform;
-            bgRT.anchorMin = bgRT.anchorMax = new Vector2(0f, 0f);
-            bgRT.pivot = new Vector2(0.5f, 0.5f);
-            bgRT.anchoredPosition = _joystickAnchor;
-            bgRT.sizeDelta = new Vector2(_joystickBgSize, _joystickBgSize);
-            var bgImage = bgGo.GetComponent<Image>();
+            var bgRT = UiFactory.Rect("Joystick_BG", parent, new Vector2(0f, 0f), new Vector2(0.5f, 0.5f), _joystickAnchor,
+                new Vector2(_joystickBgSize, _joystickBgSize));
+            var bgImage = bgRT.gameObject.AddComponent<Image>();
             bgImage.color = new Color(1f, 1f, 1f, 0.18f);
-            bgImage.sprite = MakeCircleSprite();
-            bgImage.type = Image.Type.Simple;
-            bgImage.raycastTarget = true;
+            bgImage.sprite = UiFactory.CircleSprite();
 
-            // Рукоятка
-            var hGo = new GameObject("Joystick_Handle", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
-            hGo.transform.SetParent(bgGo.transform, false);
-            var hRT = (RectTransform)hGo.transform;
-            hRT.anchorMin = hRT.anchorMax = new Vector2(0.5f, 0.5f);
-            hRT.pivot = new Vector2(0.5f, 0.5f);
-            hRT.anchoredPosition = Vector2.zero;
-            hRT.sizeDelta = new Vector2(_joystickHandleSize, _joystickHandleSize);
-            var hImage = hGo.GetComponent<Image>();
+            var hRT = UiFactory.Rect("Joystick_Handle", bgRT, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero,
+                new Vector2(_joystickHandleSize, _joystickHandleSize));
+            var hImage = hRT.gameObject.AddComponent<Image>();
             hImage.color = new Color(1f, 1f, 1f, 0.6f);
-            hImage.sprite = MakeCircleSprite();
+            hImage.sprite = UiFactory.CircleSprite();
             hImage.raycastTarget = false;
 
-            // Компонент джойстика
-            var joy = bgGo.AddComponent<VirtualJoystick>();
-            // Через рефлексию ставим приватные поля (или сделаем публичные сеттеры — но рефлексия проще для bootstrap)
-            var t = joy.GetType();
-            t.GetField("_background", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.SetValue(joy, bgRT);
-            t.GetField("_handle", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.SetValue(joy, hRT);
-            t.GetField("_radius", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.SetValue(joy, _joystickBgSize * 0.5f);
+            bgRT.gameObject.AddComponent<VirtualJoystick>().Setup(bgRT, hRT, _joystickBgSize * 0.5f);
         }
 
         private void CreateHud(Transform parent)
         {
-            // HP-бар
-            var hpBg = new GameObject("HP_BG", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
-            hpBg.transform.SetParent(parent, false);
-            var bgRT = (RectTransform)hpBg.transform;
-            bgRT.anchorMin = bgRT.anchorMax = new Vector2(0f, 1f);
-            bgRT.pivot = new Vector2(0f, 1f);
-            bgRT.anchoredPosition = new Vector2(40f, -40f);
-            bgRT.sizeDelta = new Vector2(_hpBarWidth, _hpBarHeight);
-            var hpBgImg = hpBg.GetComponent<Image>();
-            hpBgImg.color = new Color(0f, 0f, 0f, 0.6f);
-            hpBgImg.sprite = MakeWhiteSprite();
+            var runner = _arena.Runner;
 
-            var hpFillGo = new GameObject("HP_Fill", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
-            hpFillGo.transform.SetParent(hpBg.transform, false);
-            var fillRT = (RectTransform)hpFillGo.transform;
-            fillRT.anchorMin = new Vector2(0f, 0f); fillRT.anchorMax = new Vector2(1f, 1f);
-            fillRT.offsetMin = new Vector2(2f, 2f); fillRT.offsetMax = new Vector2(-2f, -2f);
-            var hpFill = hpFillGo.GetComponent<Image>();
-            hpFill.sprite = MakeWhiteSprite();
-            hpFill.color = new Color(0.85f, 0.15f, 0.15f, 1f);
-            hpFill.type = Image.Type.Filled;
-            hpFill.fillMethod = Image.FillMethod.Horizontal;
-            hpFill.fillOrigin = (int)Image.OriginHorizontal.Left;
-            hpFill.fillAmount = 1f;
-            hpFill.raycastTarget = false;
+            // Свой боец — слева сверху: HP, стамина, мана.
+            float y = -40f;
+            var hp = UiFactory.Bar("HP", parent, new Vector2(0f, 1f), new Vector2(40f, y), new Vector2(_hpBarWidth, _hpBarHeight),
+                new Color(0.85f, 0.15f, 0.15f), fromRight: false);
+            y -= _hpBarHeight + 6f;
+            var st = UiFactory.Bar("ST", parent, new Vector2(0f, 1f), new Vector2(40f, y), new Vector2(_hpBarWidth * 0.75f, _hpBarHeight * 0.6f),
+                new Color(0.95f, 0.8f, 0.2f), fromRight: false);
+            y -= _hpBarHeight * 0.6f + 4f;
+            var mp = UiFactory.Bar("MP", parent, new Vector2(0f, 1f), new Vector2(40f, y), new Vector2(_hpBarWidth * 0.75f, _hpBarHeight * 0.6f),
+                new Color(0.3f, 0.55f, 1f), fromRight: false);
+            Bind(parent, "HUD_Local", runner, runner.LocalPlayer, hp, st, mp);
 
-            // Stamina-бар
-            var stBg = new GameObject("ST_BG", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
-            stBg.transform.SetParent(parent, false);
-            var stBgRT = (RectTransform)stBg.transform;
-            stBgRT.anchorMin = stBgRT.anchorMax = new Vector2(0f, 1f);
-            stBgRT.pivot = new Vector2(0f, 1f);
-            stBgRT.anchoredPosition = new Vector2(40f, -40f - _hpBarHeight - 6f);
-            stBgRT.sizeDelta = new Vector2(_hpBarWidth * 0.75f, _hpBarHeight * 0.6f);
-            var stBgImg = stBg.GetComponent<Image>();
-            stBgImg.color = new Color(0f, 0f, 0f, 0.6f);
-            stBgImg.sprite = MakeWhiteSprite();
+            // Противник — справа сверху, зеркально.
+            var ohp = UiFactory.Bar("HP_Opponent", parent, new Vector2(1f, 1f), new Vector2(-40f, -40f), new Vector2(_hpBarWidth, _hpBarHeight),
+                new Color(0.85f, 0.15f, 0.15f), fromRight: true);
+            Bind(parent, "HUD_Opponent", runner, runner.Opponent, ohp, null, null);
 
-            var stFillGo = new GameObject("ST_Fill", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
-            stFillGo.transform.SetParent(stBg.transform, false);
-            var stFillRT = (RectTransform)stFillGo.transform;
-            stFillRT.anchorMin = new Vector2(0f, 0f); stFillRT.anchorMax = new Vector2(1f, 1f);
-            stFillRT.offsetMin = new Vector2(2f, 2f); stFillRT.offsetMax = new Vector2(-2f, -2f);
-            var stFill = stFillGo.GetComponent<Image>();
-            stFill.sprite = MakeWhiteSprite();
-            stFill.color = new Color(0.95f, 0.8f, 0.2f, 1f);
-            stFill.type = Image.Type.Filled;
-            stFill.fillMethod = Image.FillMethod.Horizontal;
-            stFill.fillOrigin = (int)Image.OriginHorizontal.Left;
-            stFill.fillAmount = 1f;
-            stFill.raycastTarget = false;
+            // И полоска над головой противника — её видно, когда смотришь на бой, а не на угол экрана.
+            var bar = _arena.Opponent.gameObject.AddComponent<WorldSpaceHealthBar>();
+            int opp = runner.Opponent;
+            bar.Bind(() => runner.State.Fighters[opp].Health.ToFloat() / runner.Sim.Setup.Fighters[opp].MaxHealth.ToFloat());
+        }
 
-            // HUD-биндер — создаём ВЫКЛЮЧЕННЫМ, биндим ссылки, включаем.
-            // Так OnEnable() сработает один раз и сразу с правильными полями.
-            var hudGo = new GameObject("HUD_Binder");
-            hudGo.transform.SetParent(parent, false);
-            hudGo.SetActive(false);
-            var hud = hudGo.AddComponent<FighterHUD>();
-            hud.Bind(_localPlayer, hpFill, stFill);
-            hudGo.SetActive(true);
+        private static void Bind(Transform parent, string name, MatchRunner runner, int index, Image hp, Image st, Image mp)
+        {
+            // Создаём выключенным, биндим, включаем — OnEnable сработает уже с правильными полями.
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            go.SetActive(false);
+            go.AddComponent<FighterHUD>().Bind(runner, index, hp, st, mp);
+            go.SetActive(true);
+        }
+
+        private void CreateMatchHud(Transform parent)
+        {
+            var go = new GameObject("MatchHUD", typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin = Vector2.zero;
+            rt.anchorMax = Vector2.one;
+            rt.offsetMin = rt.offsetMax = Vector2.zero;
+            go.SetActive(false);
+            go.AddComponent<MatchHUD>().Bind(_arena.Runner);
+            go.SetActive(true);
+        }
+
+        private void CreateOffscreenIndicator(Transform parent)
+        {
+            var go = new GameObject("OffscreenIndicator", typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+            go.SetActive(false);
+            var indicator = go.AddComponent<OffscreenIndicator>();
+            int opp = _arena.Runner.Opponent;
+            var runner = _arena.Runner;
+            indicator.Bind(_arena.Opponent.transform, ArenaBuilder.OpponentColor, () => runner.State.Fighters[opp].IsAlive);
+            go.SetActive(true);
+        }
+
+        private void CreateLatencyOverlay()
+        {
+            var go = new GameObject("_LatencyOverlay");
+            go.SetActive(false);
+            go.AddComponent<LatencyOverlay>().Bind(_arena.Runner);
+            go.SetActive(true);
         }
 
         // ---------- Input backend ----------
 
-        private void EnsureGestureBackend()
+        private static void EnsureGestureBackend()
         {
-            var existing = FindAnyObjectByType<GestureRecognizer>();
-            if (existing == null)
-            {
-                var go = new GameObject("_Input");
-                var recognizer = go.AddComponent<GestureRecognizer>();
-                var provider = go.AddComponent<TouchInputProvider>();
-                var pT = provider.GetType();
-                pT.GetField("_gestureRecognizer", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.SetValue(provider, recognizer);
-            }
-        }
-
-        // ---------- Helpers ----------
-
-        private Fighter FindLocalPlayer()
-        {
-            var fighters = FindObjectsByType<Fighter>(FindObjectsSortMode.None);
-            foreach (var f in fighters)
-                if (f.IsLocalPlayer) return f;
-            return null;
-        }
-
-        private static Sprite _whiteSprite;
-        internal static Sprite MakeWhiteSprite()
-        {
-            if (_whiteSprite != null) return _whiteSprite;
-            const int size = 4;
-            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
-            var pixels = new Color32[size * size];
-            for (int i = 0; i < pixels.Length; i++) pixels[i] = new Color32(255, 255, 255, 255);
-            tex.SetPixels32(pixels);
-            tex.filterMode = FilterMode.Bilinear;
-            tex.wrapMode = TextureWrapMode.Clamp;
-            tex.Apply();
-            _whiteSprite = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 100f);
-            _whiteSprite.name = "WhiteSprite_Generated";
-            return _whiteSprite;
-        }
-
-        private static Sprite _circleSprite;
-        private static Sprite MakeCircleSprite()
-        {
-            if (_circleSprite != null) return _circleSprite;
-            const int size = 128;
-            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
-            var pixels = new Color32[size * size];
-            float r = size * 0.5f;
-            for (int y = 0; y < size; y++)
-            for (int x = 0; x < size; x++)
-            {
-                float dx = x + 0.5f - r;
-                float dy = y + 0.5f - r;
-                bool inside = dx * dx + dy * dy <= r * r;
-                pixels[y * size + x] = inside ? new Color32(255, 255, 255, 255) : new Color32(255, 255, 255, 0);
-            }
-            tex.SetPixels32(pixels);
-            tex.Apply();
-            _circleSprite = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 100f);
-            return _circleSprite;
+            if (FindAnyObjectByType<TouchInputProvider>() == null)
+                new GameObject("_Input").AddComponent<TouchInputProvider>(); // распознаватель жестов создаётся внутри
         }
     }
 }

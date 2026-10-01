@@ -4,7 +4,8 @@
     "references": [
         "Game.Core",
         "Game.Combat",
-        "Game.Input"
+        "Game.Input",
+        "Game.Simulation"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

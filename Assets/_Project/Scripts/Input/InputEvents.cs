@@ -18,20 +18,29 @@ namespace Game.Input
     }
 
     /// <summary>
-    /// Команда от слоя ввода. Содержит тип и (опционально) направление в мировых/экранных координатах.
-    /// Направление нужно для свайпов (dodge влево/вправо) и каста направленных способностей.
+    /// Команда от слоя ввода. Содержит тип и (опционально) направление.
+    /// Направление нужно для свайпов (dodge) и каста направленных способностей; из экрана в мир его переводит
+    /// слой ввода, поэтому бой (а позже детерминированная симуляция) не зависит от камеры.
     /// </summary>
     public readonly struct InputCommand
     {
         public readonly CommandType Type;
-        public readonly Vector2 Direction; // нормализованная, в экранных координатах (x=право, y=верх)
+        /// <summary> Нормализованное мировое направление в плоскости XZ (x = мировой X, y = мировой Z); ноль — без направления. </summary>
+        public readonly Vector2 Direction;
         public readonly float Timestamp;
+        /// <summary> Начало действия игрока (касание; для BlockEnd — отпускание). Шкала Time.realtimeSinceStartupAsDouble; 0 — неизвестно. </summary>
+        public readonly double InputTime;
+        /// <summary> Событие ввода, на котором жест распознан (та же шкала); 0 — неизвестно. </summary>
+        public readonly double RecognizedTime;
 
-        public InputCommand(CommandType type, Vector2 direction, float timestamp)
+        public InputCommand(CommandType type, Vector2 direction, float timestamp,
+                            double inputTime = 0.0, double recognizedTime = 0.0)
         {
             Type = type;
             Direction = direction;
             Timestamp = timestamp;
+            InputTime = inputTime;
+            RecognizedTime = recognizedTime;
         }
     }
 

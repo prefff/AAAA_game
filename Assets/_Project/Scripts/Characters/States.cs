@@ -17,6 +17,8 @@ namespace Game.Characters
                 Fighter.Hurtbox.HasIFrames = false;
             }
             if (Fighter.Hitbox != null) Fighter.Hitbox.Deactivate();
+            // Гасим остаточную скорость от бега / уклонения / knockback, чтобы боец не скользил.
+            Fighter.StopHorizontal();
         }
 
         public override void Tick(float dt)
@@ -41,20 +43,7 @@ namespace Game.Characters
             }
 
             // Camera-relative движение: "вверх по джойстику" = от камеры.
-            var cam = Camera.main;
-            Vector3 fwd, right;
-            if (cam != null)
-            {
-                fwd = cam.transform.forward; fwd.y = 0f; fwd.Normalize();
-                right = cam.transform.right; right.y = 0f; right.Normalize();
-            }
-            else
-            {
-                fwd = Vector3.forward;
-                right = Vector3.right;
-            }
-
-            var worldDir = (right * input.x + fwd * input.y);
+            var worldDir = Fighter.ToWorldDirection(input);
             if (worldDir.sqrMagnitude > 1f) worldDir.Normalize();
 
             var rb = Fighter.Body;
@@ -66,8 +55,7 @@ namespace Game.Characters
             if (worldDir.sqrMagnitude > 0.0001f)
             {
                 var targetRot = Quaternion.LookRotation(worldDir, Vector3.up);
-                Fighter.transform.rotation = Quaternion.RotateTowards(
-                    Fighter.transform.rotation, targetRot, Fighter.RotationSpeed * fdt);
+                rb.MoveRotation(Quaternion.RotateTowards(rb.rotation, targetRot, Fighter.RotationSpeed * fdt));
             }
         }
 
@@ -75,32 +63,38 @@ namespace Game.Characters
     }
 
     // ===== ATTACK =====
+    /// <summary>
+    /// Удар по frame data. Startup — окно распознавания жеста: в нём удар бесплатно (стамина списывается только
+    /// при выходе хитбокса) отменяется в уклонение, парирование, блок или тяжёлый удар.
+    /// </summary>
     public class AttackState : FighterState
     {
+        public enum Phase { Startup, Active, Recovery }
+
         private AttackData _attack;
+        private AttackData _pending;
         private float _elapsed;
-        private enum Phase { Startup, Active, Recovery }
         private Phase _phase;
 
+        public AttackData Attack => _attack;
+        public Phase CurrentPhase => _phase;
+
+        /// <summary> Задать атаку перед входом. Наличие стамины проверяется заранее (см. CommonCommandRouter). </summary>
         public void Configure(AttackData attack)
         {
-            _attack = attack;
+            _pending = attack;
         }
 
         public override void OnEnter()
         {
-            if (_attack == null) _attack = Fighter.LightAttack;
-            if (_attack == null)
-            {
-                // Не настроен AttackData — выходим в Idle, чтобы не упасть.
-                Fighter.FSM.Change(Fighter.FSM.Get<IdleState>());
-                return;
-            }
+            _attack = _pending != null ? _pending : Fighter.LightAttack;
+            _pending = null;
+
             _elapsed = 0f;
             _phase = Phase.Startup;
 
             // Остановить горизонтальное движение (атака с места)
-            var v = Fighter.Body.linearVelocity; v.x = 0f; v.z = 0f; Fighter.Body.linearVelocity = v;
+            Fighter.StopHorizontal();
 
             if (Fighter.Hurtbox != null)
             {
@@ -112,13 +106,25 @@ namespace Game.Characters
 
         public override void Tick(float dt)
         {
-            if (_attack == null) return;
+            if (_attack == null)
+            {
+                // Не настроен AttackData — выходим в Idle, чтобы не зависнуть.
+                Fighter.FSM.Change(Fighter.FSM.Get<IdleState>());
+                return;
+            }
+
             _elapsed += dt;
             switch (_phase)
             {
                 case Phase.Startup:
                     if (_elapsed >= _attack.StartupSeconds)
                     {
+                        // Платим за удар, только когда он состоялся: отмена в startup бесплатна.
+                        if (Fighter.Stamina != null && !Fighter.Stamina.TrySpend(_attack.StaminaCost))
+                        {
+                            Fighter.FSM.Change(Fighter.FSM.Get<IdleState>());
+                            return;
+                        }
                         if (Fighter.Hitbox != null) Fighter.Hitbox.Activate(_attack);
                         _phase = Phase.Active;
                         _elapsed = 0f;
@@ -149,16 +155,26 @@ namespace Game.Characters
 
         public override FighterState HandleCommand(InputCommand cmd)
         {
-            // На recovery разрешаем cancel в парирование/уклонение (фишка глубокой обороны)
-            if (_phase == Phase.Recovery)
+            switch (_phase)
             {
-                if (cmd.Type == CommandType.Parry) return Fighter.FSM.Get<ParryState>();
-                if (cmd.Type == CommandType.Dodge)
-                {
-                    var dodge = Fighter.FSM.Get<DodgeState>();
-                    dodge.Direction = cmd.Direction;
-                    return dodge;
-                }
+                // Startup — окно распознавания жеста: касание уже запустило удар, продолжение жеста его уточняет.
+                case Phase.Startup:
+                    switch (cmd.Type)
+                    {
+                        case CommandType.Dodge: return CommonCommandRouter.TryDodge(Fighter, cmd.Direction);
+                        case CommandType.Parry: return Fighter.FSM.Get<ParryState>();
+                        case CommandType.BlockStart: return Fighter.FSM.Get<BlockState>();
+                        case CommandType.HeavyAttack:
+                            // Лёгкий удар → тяжёлый (вернётся этот же AttackState — FSM перезапустит его).
+                            return _attack != Fighter.HeavyAttack ? CommonCommandRouter.TryAttack(Fighter, Fighter.HeavyAttack) : null;
+                    }
+                    return null;
+
+                // На recovery разрешаем cancel в парирование/уклонение (фишка глубокой обороны)
+                case Phase.Recovery:
+                    if (cmd.Type == CommandType.Parry) return Fighter.FSM.Get<ParryState>();
+                    if (cmd.Type == CommandType.Dodge) return CommonCommandRouter.TryDodge(Fighter, cmd.Direction);
+                    return null;
             }
             return null;
         }
@@ -167,11 +183,30 @@ namespace Game.Characters
     // ===== BLOCK =====
     public class BlockState : FighterState
     {
+        private float _blockstunRemaining;
+        private bool _releaseQueued;
+
         public override void OnEnter()
         {
+            _blockstunRemaining = 0f;
+            _releaseQueued = false;
             if (Fighter.Hurtbox != null) Fighter.Hurtbox.IsBlocking = true;
             // Остановиться в блоке
-            var v = Fighter.Body.linearVelocity; v.x = 0f; v.z = 0f; Fighter.Body.linearVelocity = v;
+            Fighter.StopHorizontal();
+        }
+
+        /// <summary> Удар в блок: остаёмся в блоке, но на время блок-стана не можем действовать. </summary>
+        public void ApplyBlockstun(float seconds)
+        {
+            _blockstunRemaining = Mathf.Max(_blockstunRemaining, seconds);
+        }
+
+        public override void Tick(float dt)
+        {
+            if (_blockstunRemaining <= 0f) return;
+            _blockstunRemaining -= dt;
+            if (_blockstunRemaining <= 0f && _releaseQueued)
+                Fighter.FSM.Change(Fighter.FSM.Get<IdleState>());
         }
 
         public override void OnExit()
@@ -181,14 +216,16 @@ namespace Game.Characters
 
         public override FighterState HandleCommand(InputCommand cmd)
         {
+            if (_blockstunRemaining > 0f)
+            {
+                // Отпускание блока запоминаем и применяем, когда блок-стан закончится.
+                if (cmd.Type == CommandType.BlockEnd) _releaseQueued = true;
+                return null;
+            }
+
             if (cmd.Type == CommandType.BlockEnd) return Fighter.FSM.Get<IdleState>();
             if (cmd.Type == CommandType.Parry) return Fighter.FSM.Get<ParryState>();
-            if (cmd.Type == CommandType.Dodge)
-            {
-                var dodge = Fighter.FSM.Get<DodgeState>();
-                dodge.Direction = cmd.Direction;
-                return dodge;
-            }
+            if (cmd.Type == CommandType.Dodge) return CommonCommandRouter.TryDodge(Fighter, cmd.Direction);
             return null;
         }
     }
@@ -206,8 +243,8 @@ namespace Game.Characters
                 Fighter.Hurtbox.IsParryActive = true;
                 Fighter.Hurtbox.IsBlocking = false;
             }
-            // Подписываемся на успешное парирование, чтобы наградить игрока
-            EventBus.Subscribe<AttackParriedEvent>(OnParried);
+            // Подписка живёт только пока активно окно парирования; OnExit гарантированно отписывает.
+            EventBus.Subscribe<AttackParriedEvent>(this, OnParried);
         }
 
         public override void Tick(float dt)
@@ -219,8 +256,8 @@ namespace Game.Characters
 
         public override void OnExit()
         {
+            EventBus.UnsubscribeAll(this);
             if (Fighter.Hurtbox != null) Fighter.Hurtbox.IsParryActive = false;
-            EventBus.Unsubscribe<AttackParriedEvent>(OnParried);
         }
 
         private void OnParried(AttackParriedEvent e)
@@ -233,45 +270,58 @@ namespace Game.Characters
     // ===== DODGE =====
     public class DodgeState : FighterState
     {
-        /// <summary> Направление уклонения (экранные XY, x=право, y=верх). </summary>
+        /// <summary> Направление уклонения в мире (x = X, y = Z) — его уже перевёл из экрана слой ввода. </summary>
         public Vector2 Direction;
+        private Vector3 _worldDir;
         private float _elapsed;
-        private int _iframesLeft;
+        private bool _staminaSpent;
 
         public override void OnEnter()
         {
-            // Проверка стамины
-            if (Fighter.Stamina != null && !Fighter.Stamina.TrySpend(Fighter.DodgeStaminaCost))
-            {
-                Fighter.FSM.Change(Fighter.FSM.Get<IdleState>());
-                return;
-            }
+            _staminaSpent = Fighter.Stamina != null && Fighter.Stamina.TrySpend(Fighter.DodgeStaminaCost);
 
             _elapsed = 0f;
-            _iframesLeft = Fighter.DodgeIFrames;
             if (Fighter.Hurtbox != null) Fighter.Hurtbox.HasIFrames = true;
 
-            var dir3 = new Vector3(Direction.x, 0f, Direction.y);
-            if (dir3.sqrMagnitude < 0.0001f) dir3 = -Fighter.transform.forward; // дефолт — назад
-            dir3.Normalize();
-            Fighter.Body.linearVelocity = dir3 * Fighter.DodgeSpeed + Vector3.up * Fighter.Body.linearVelocity.y;
+            _worldDir = new Vector3(Direction.x, 0f, Direction.y);
+            if (_worldDir.sqrMagnitude < 0.0001f) _worldDir = -Fighter.transform.forward; // дефолт — назад
+            _worldDir.Normalize();
+        }
+
+        public override FighterState HandleCommand(InputCommand cmd)
+        {
+            // Flick распознаётся при отпускании, а сдвиг пальца уже запустил уклонение: это не намерение игрока,
+            // а этап распознавания — отменяем в парирование и возвращаем стамину.
+            if (cmd.Type == CommandType.Parry && _elapsed <= Fighter.DodgeToParryCancelWindow)
+            {
+                if (_staminaSpent) Fighter.Stamina.Restore(Fighter.DodgeStaminaCost);
+                _staminaSpent = false;
+                return Fighter.FSM.Get<ParryState>();
+            }
+            return null;
         }
 
         public override void Tick(float dt)
         {
             _elapsed += dt;
-            // i-frames истекают через DodgeIFrames кадров (~ 60fps)
-            _iframesLeft--;
-            if (_iframesLeft <= 0 && Fighter.Hurtbox != null) Fighter.Hurtbox.HasIFrames = false;
+            // i-frames считаем во времени, а не в кадрах рендера — иначе на 120 Гц окно сокращается вдвое.
+            if (_elapsed >= Fighter.DodgeIFrameSeconds && Fighter.Hurtbox != null) Fighter.Hurtbox.HasIFrames = false;
 
             if (_elapsed >= Fighter.DodgeDuration)
                 Fighter.FSM.Change(Fighter.FSM.Get<IdleState>());
         }
 
+        public override void FixedTick(float fdt)
+        {
+            // Держим скорость рывка весь DodgeDuration (иначе трение гасит его за пару кадров).
+            var rb = Fighter.Body;
+            rb.linearVelocity = _worldDir * Fighter.DodgeSpeed + Vector3.up * rb.linearVelocity.y;
+        }
+
         public override void OnExit()
         {
             if (Fighter.Hurtbox != null) Fighter.Hurtbox.HasIFrames = false;
-            var v = Fighter.Body.linearVelocity; v.x = 0f; v.z = 0f; Fighter.Body.linearVelocity = v;
+            Fighter.StopHorizontal();
         }
     }
 
@@ -279,6 +329,8 @@ namespace Game.Characters
     public class HitstunState : FighterState
     {
         private float _remaining;
+
+        /// <summary> Задать/обновить длительность. Повторное попадание во время hitstun продлевает его. </summary>
         public void SetDuration(float seconds) => _remaining = seconds;
 
         public override void OnEnter()
@@ -289,6 +341,7 @@ namespace Game.Characters
                 Fighter.Hurtbox.IsParryActive = false;
             }
             if (Fighter.Hitbox != null) Fighter.Hitbox.Deactivate();
+            // Скорость не трогаем — knockback от удара должен доиграть.
         }
 
         public override void Tick(float dt)
@@ -306,23 +359,37 @@ namespace Game.Characters
             switch (cmd.Type)
             {
                 case CommandType.LightAttack:
-                    var atkL = f.FSM.Get<AttackState>();
-                    atkL.Configure(f.LightAttack);
-                    return atkL;
+                    return TryAttack(f, f.LightAttack);
                 case CommandType.HeavyAttack:
-                    var atkH = f.FSM.Get<AttackState>();
-                    atkH.Configure(f.HeavyAttack != null ? f.HeavyAttack : f.LightAttack);
-                    return atkH;
+                    return TryAttack(f, f.HeavyAttack != null ? f.HeavyAttack : f.LightAttack);
                 case CommandType.BlockStart:
                     return f.FSM.Get<BlockState>();
                 case CommandType.Parry:
                     return f.FSM.Get<ParryState>();
                 case CommandType.Dodge:
-                    var dodge = f.FSM.Get<DodgeState>();
-                    dodge.Direction = cmd.Direction;
-                    return dodge;
+                    return TryDodge(f, cmd.Direction);
             }
             return null;
         }
+
+        /// <summary> Атака, если она настроена и хватает стамины; иначе null (команда игнорируется). </summary>
+        public static FighterState TryAttack(Fighter f, AttackData attack)
+        {
+            if (attack == null || !CanAfford(f, attack.StaminaCost)) return null;
+            var state = f.FSM.Get<AttackState>();
+            state.Configure(attack);
+            return state;
+        }
+
+        /// <summary> Уклонение, если хватает стамины; иначе null (команда игнорируется). </summary>
+        public static FighterState TryDodge(Fighter f, Vector2 direction)
+        {
+            if (!CanAfford(f, f.DodgeStaminaCost)) return null;
+            var state = f.FSM.Get<DodgeState>();
+            state.Direction = direction;
+            return state;
+        }
+
+        private static bool CanAfford(Fighter f, float cost) => f.Stamina == null || f.Stamina.HasEnough(cost);
     }
 }

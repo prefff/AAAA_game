@@ -24,6 +24,14 @@ namespace Game.Input
 
         public Vector2 Direction => _input.magnitude < _deadZone ? Vector2.zero : _input;
 
+        /// <summary> Программная настройка (для bootstrap без reflection). </summary>
+        public void Setup(RectTransform background, RectTransform handle, float radius)
+        {
+            _background = background;
+            _handle = handle;
+            _radius = radius;
+        }
+
         private void Reset()
         {
             _background = GetComponent<RectTransform>();

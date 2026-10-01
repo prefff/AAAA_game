@@ -1,4 +1,4 @@
-#if UNITY_EDITOR
+п»ї#if UNITY_EDITOR
 using System;
 using System.IO;
 using UnityEditor;
@@ -9,16 +9,22 @@ using UnityEngine;
 namespace Game.EditorTools
 {
     /// <summary>
-    /// Скрипт сборки Android APK.
-    /// Вызывается двумя способами:
-    ///   1) Через меню: Tools ? Build ? Android APK
-    ///   2) Через CLI: -executeMethod Game.EditorTools.BuildScript.BuildAndroid
+    /// РЎРєСЂРёРїС‚ СЃР±РѕСЂРєРё Android APK.
+    /// Р’С‹Р·С‹РІР°РµС‚СЃСЏ РґРІСѓРјСЏ СЃРїРѕСЃРѕР±Р°РјРё:
+    ///   1) Р§РµСЂРµР· РјРµРЅСЋ: Tools в†’ Build в†’ Android APK
+    ///   2) Р§РµСЂРµР· CLI: -executeMethod Game.EditorTools.BuildScript.BuildAndroid
     ///
-    /// Перед сборкой автоматически выставляет необходимые Player Settings:
-    ///   - landscape ориентация
+    /// РџРµСЂРµРґ СЃР±РѕСЂРєРѕР№ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РІС‹СЃС‚Р°РІР»СЏРµС‚ РЅРµРѕР±С…РѕРґРёРјС‹Рµ Player Settings:
+    ///   - landscape РѕСЂРёРµРЅС‚Р°С†РёСЏ
     ///   - IL2CPP + ARM64
     ///   - package name
-    ///   - корректное Active Input Handling
+    ///   - РєРѕСЂСЂРµРєС‚РЅРѕРµ Active Input Handling
+    ///
+    /// Р’Р°СЂРёР°РЅС‚С‹ РґР»СЏ Р·Р°РјРµСЂР° Р·Р°РґРµСЂР¶РєРё (СЌС‚Р°Рї 1 РїР»Р°РЅР°) вЂ” СЃСЂР°РІРЅРёС‚СЊ РЅР° РѕРґРЅРѕРј СѓСЃС‚СЂРѕР№СЃС‚РІРµ РѕРІРµСЂР»РµРµРј LAT:
+    ///   - Optimized Frame Pacing (Swappy) РІРєР»/РІС‹РєР»;
+    ///   - С‡РёСЃР»Рѕ Р±СѓС„РµСЂРѕРІ СЃРІРѕРїС‡РµР№РЅР° Vulkan: 2 (РЅР° РєР°РґСЂ РјРµРЅСЊС€Рµ Р·Р°РґРµСЂР¶РєРё) РёР»Рё 3 (СЂРѕРІРЅРµРµ РїСЂРё РїСЂРѕСЃР°РґРєР°С…).
+    /// CLI: -framePacing on|off  -swapchainBuffers 2|3  -development
+    /// РРјСЏ APK СЃРѕРґРµСЂР¶РёС‚ РІР°СЂРёР°РЅС‚, РЅР°РїСЂРёРјРµСЂ AAAA_game_fp-off_sc2.apk.
     /// </summary>
     public static class BuildScript
     {
@@ -26,21 +32,67 @@ namespace Game.EditorTools
         private const string ProductName = "AAAA Game";
         private const string CompanyName = "AAAA";
         private const string OutputDir = "Builds/Android";
-        private const string ApkName = "AAAA_game.apk";
+        private const string ApkBaseName = "AAAA_game";
         private const string ScenePath = "Assets/_Project/Scenes/Arena.unity";
 
-        [MenuItem("Tools/Build/Android APK")]
-        public static void BuildAndroidMenu() => BuildAndroid();
+        /// <summary> РќР°СЃС‚СЂРѕР№РєРё СЃР±РѕСЂРєРё, РІР»РёСЏСЋС‰РёРµ РЅР° Р·Р°РґРµСЂР¶РєСѓ РІС‹РІРѕРґР° РєР°РґСЂР°. </summary>
+        private struct LatencyVariant
+        {
+            public bool FramePacing;
+            public int SwapchainBuffers;
+            public bool Development;
 
-        public static void BuildAndroid()
+            public string Suffix => $"_fp-{(FramePacing ? "on" : "off")}_sc{SwapchainBuffers}{(Development ? "_dev" : "")}";
+        }
+
+        private static readonly LatencyVariant DefaultVariant = new() { FramePacing = true, SwapchainBuffers = 3 };
+
+        [MenuItem("Tools/Build/Android APK")]
+        public static void BuildAndroidMenu() => BuildAndroid(DefaultVariant);
+
+        [MenuItem("Tools/Build/Android APK (Р·Р°РјРµСЂ Р·Р°РґРµСЂР¶РєРё: Р±РµР· Frame Pacing, 2 Р±СѓС„РµСЂР°)")]
+        public static void BuildAndroidLowLatencyMenu() =>
+            BuildAndroid(new LatencyVariant { FramePacing = false, SwapchainBuffers = 2 });
+
+        /// <summary> РўРѕС‡РєР° РІС…РѕРґР° CLI: -executeMethod Game.EditorTools.BuildScript.BuildAndroid [-framePacing off] [-swapchainBuffers 2] [-development] </summary>
+        public static void BuildAndroid() => BuildAndroid(ParseVariant(Environment.GetCommandLineArgs()));
+
+        private static LatencyVariant ParseVariant(string[] args)
+        {
+            var v = DefaultVariant;
+            for (int i = 0; i < args.Length; i++)
+            {
+                string next = i + 1 < args.Length ? args[i + 1] : null;
+                switch (args[i])
+                {
+                    case "-framePacing":
+                        v.FramePacing = next != "off" && next != "false" && next != "0";
+                        break;
+                    case "-swapchainBuffers":
+                        if (int.TryParse(next, out int n) && (n == 2 || n == 3)) v.SwapchainBuffers = n;
+                        else Debug.LogWarning($"[BuildScript] -swapchainBuffers: РѕР¶РёРґР°РµС‚СЃСЏ 2 РёР»Рё 3, РїРѕР»СѓС‡РµРЅРѕ '{next}'");
+                        break;
+                    case "-development":
+                        v.Development = true;
+                        break;
+                }
+            }
+            return v;
+        }
+
+        private static void BuildAndroid(LatencyVariant variant)
         {
             ConfigurePlayerSettings();
+            PlayerSettings.Android.optimizedFramePacing = variant.FramePacing;
+            PlayerSettings.vulkanNumSwapchainBuffers = (uint)variant.SwapchainBuffers;
+            Debug.Log($"[BuildScript] Р’Р°СЂРёР°РЅС‚ Р·Р°РґРµСЂР¶РєРё: Frame Pacing {(variant.FramePacing ? "РІРєР»" : "РІС‹РєР»")}, " +
+                      $"Р±СѓС„РµСЂРѕРІ СЃРІРѕРїС‡РµР№РЅР° {variant.SwapchainBuffers}, development {variant.Development}");
 
             var outDir = Path.Combine(Directory.GetCurrentDirectory(), OutputDir);
             Directory.CreateDirectory(outDir);
-            var outPath = Path.Combine(outDir, ApkName);
+            var outPath = Path.Combine(outDir, ApkBaseName + variant.Suffix + ".apk");
 
-            // Добавляем сцену, если её нет в Build Settings
+            // Р”РѕР±Р°РІР»СЏРµРј СЃС†РµРЅСѓ, РµСЃР»Рё РµС‘ РЅРµС‚ РІ Build Settings
             var scenes = EditorBuildSettings.scenes;
             bool sceneAlreadyAdded = false;
             foreach (var s in scenes)
@@ -61,20 +113,20 @@ namespace Game.EditorTools
                 locationPathName = outPath,
                 target = BuildTarget.Android,
                 targetGroup = BuildTargetGroup.Android,
-                options = BuildOptions.None
+                options = variant.Development ? BuildOptions.Development : BuildOptions.None
             };
 
-            Debug.Log($"[BuildScript] Начинаю сборку APK ? {outPath}");
+            Debug.Log($"[BuildScript] РќР°С‡РёРЅР°СЋ СЃР±РѕСЂРєСѓ APK в†’ {outPath}");
             BuildReport report = BuildPipeline.BuildPlayer(options);
 
             var summary = report.summary;
             if (summary.result == BuildResult.Succeeded)
             {
-                Debug.Log($"[BuildScript] ? Сборка успешна: {outPath} ({summary.totalSize / (1024 * 1024)} МБ, длительность {summary.totalTime})");
+                Debug.Log($"[BuildScript] вњ“ РЎР±РѕСЂРєР° СѓСЃРїРµС€РЅР°: {outPath} ({summary.totalSize / (1024 * 1024)} РњР‘, РґР»РёС‚РµР»СЊРЅРѕСЃС‚СЊ {summary.totalTime})");
             }
             else
             {
-                Debug.LogError($"[BuildScript] ? Сборка не удалась: {summary.result}, ошибок: {summary.totalErrors}");
+                Debug.LogError($"[BuildScript] вњ— РЎР±РѕСЂРєР° РЅРµ СѓРґР°Р»Р°СЃСЊ: {summary.result}, РѕС€РёР±РѕРє: {summary.totalErrors}");
                 if (Application.isBatchMode) EditorApplication.Exit(1);
             }
         }
@@ -103,17 +155,17 @@ namespace Game.EditorTools
             PlayerSettings.SetScriptingBackend(NamedBuildTarget.Android, ScriptingImplementation.IL2CPP);
             PlayerSettings.SetApiCompatibilityLevel(NamedBuildTarget.Android, ApiCompatibilityLevel.NET_Standard);
 
-            // Render outside safe area (для устройств с выемкой/dynamic island)
+            // Render outside safe area (РґР»СЏ СѓСЃС‚СЂРѕР№СЃС‚РІ СЃ РІС‹РµРјРєРѕР№/dynamic island)
             PlayerSettings.Android.renderOutsideSafeArea = true;
 
-            // Color space (URP лучше работает в Linear)
+            // Color space (URP Р»СѓС‡С€Рµ СЂР°Р±РѕС‚Р°РµС‚ РІ Linear)
             PlayerSettings.colorSpace = ColorSpace.Linear;
 
-            // Active Input Handling — у нас используется новый Input System
-            // (поле задаётся через serializedObject; в новых Unity ставится автоматически по пакету)
+            // Active Input Handling вЂ” Сѓ РЅР°СЃ РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РЅРѕРІС‹Р№ Input System
+            // (РїРѕР»Рµ Р·Р°РґР°С‘С‚СЃСЏ С‡РµСЂРµР· serializedObject; РІ РЅРѕРІС‹С… Unity СЃС‚Р°РІРёС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РїРѕ РїР°РєРµС‚Сѓ)
 
             AssetDatabase.SaveAssets();
-            Debug.Log("[BuildScript] Player Settings сконфигурированы для Android.");
+            Debug.Log("[BuildScript] Player Settings СЃРєРѕРЅС„РёРіСѓСЂРёСЂРѕРІР°РЅС‹ РґР»СЏ Android.");
         }
     }
 }

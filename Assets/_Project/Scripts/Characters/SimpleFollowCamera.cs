@@ -21,6 +21,7 @@ namespace Game.Characters
         [SerializeField] private bool _autoFindLocalPlayer = true;
 
         public void SetTarget(Transform t) => _target = t;
+        public Transform Target => _target;
         public Vector3 Offset { get => _offset; set => _offset = value; }
 
         private void OnEnable()

@@ -55,4 +55,22 @@ namespace Game.Combat
         public readonly GameObject Entity;
         public DeathEvent(GameObject entity) => Entity = entity;
     }
+
+    /// <summary>
+    /// Запрос на оглушение сущности после попадания (публикует Hitbox).
+    /// IsBlockstun = true — удар пришёлся в блок: цель остаётся в блоке, но не может действовать.
+    /// </summary>
+    public readonly struct HitstunRequestedEvent
+    {
+        public readonly GameObject Entity;
+        public readonly float Seconds;
+        public readonly bool IsBlockstun;
+
+        public HitstunRequestedEvent(GameObject entity, float seconds, bool isBlockstun)
+        {
+            Entity = entity;
+            Seconds = seconds;
+            IsBlockstun = isBlockstun;
+        }
+    }
 }

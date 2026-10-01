@@ -1,41 +1,106 @@
-using Game.Characters;
+п»їusing Game.Characters;
 using Game.Combat;
+using Game.Simulation;
 using UnityEngine;
 
 namespace Game.UI
 {
     /// <summary>
-    /// Процедурно строит арену при старте сцены:
-    ///   - Floor (плоскость)
-    ///   - Player (Capsule + Fighter + Health + Stamina + Hurtbox + Hitbox + Rigidbody)
-    ///   - Dummy (Capsule + Health + Hurtbox + DummyTarget)
-    ///   - MainCamera (с SimpleFollowCamera)
-    ///   - Directional Light
-    ///
-    /// Атаки (AttackData) загружаются из Resources/Attacks/Attack_Light и Attack_Heavy.
+    /// РЎРѕР±РёСЂР°РµС‚ Р°СЂРµРЅСѓ Рё Р±РѕР№С†РѕРІ РёР· РґР°РЅРЅС‹С… СЃРёРјСѓР»СЏС†РёРё:
+    ///   - MatchRunner (СЃРёРјСѓР»СЏС†РёСЏ Р±РѕСЏ) СЃ РїР°СЂР°РјРµС‚СЂР°РјРё Р±РѕР№С†РѕРІ;
+    ///   - РїРѕР», СЃС‚РµРЅС‹ РїРѕ РєСЂР°СЏРј Рё РїСЂРµРїСЏС‚СЃС‚РІРёСЏ вЂ” РїРѕ ArenaSpec (РіРµРѕРјРµС‚СЂРёСЏ РІ РјРёСЂРµ СЃРѕРІРїР°РґР°РµС‚ СЃ РєРѕР»Р»РёР·РёСЏРјРё СЃРёРјСѓР»СЏС†РёРё);
+    ///   - РІРёРґС‹ РґРІСѓС… Р±РѕР№С†РѕРІ (РёР· РїСЂРµС„Р°Р±РѕРІ РёР»Рё РїСЂРѕС†РµРґСѓСЂРЅРѕ: РєР°РїСЃСѓР»Р° + РґРёСЃРє С…РёС‚Р±РѕРєСЃР°);
+    ///   - РєР°РјРµСЂСѓ MobaCamera РЅР° СЃРІРѕС‘Рј Р±РѕР№С†Рµ Рё СЃРІРµС‚.
+    /// Р¤РёР·РёРєРё Unity Р·РґРµСЃСЊ РЅРµС‚: РєРѕР»Р»Р°Р№РґРµСЂС‹ РїСЂРёРјРёС‚РёРІРѕРІ СѓРґР°Р»СЏСЋС‚СЃСЏ, РІСЃС‘ РґРІРёР¶РµРЅРёРµ Рё СЃС‚РѕР»РєРЅРѕРІРµРЅРёСЏ вЂ” РІ СЃРёРјСѓР»СЏС†РёРё.
+    /// РЈР¶Рµ СЃСѓС‰РµСЃС‚РІСѓСЋС‰РёРµ РѕР±СЉРµРєС‚С‹ (СЃРІРµС‚, РїРѕР», РєР°РјРµСЂР°) РїРµСЂРµРёСЃРїРѕР»СЊР·СѓСЋС‚СЃСЏ, РїРѕСЌС‚РѕРјСѓ РїРѕРІС‚РѕСЂРЅС‹Р№ РІС‹Р·РѕРІ Р±РµР·РѕРїР°СЃРµРЅ.
     /// </summary>
     public static class ArenaBuilder
     {
-        // --- Параметры (можно вытащить в SerializeField bootstrap'a при необходимости) ---
-        private const float FloorSize = 30f;
-        private static readonly Vector3 PlayerStart = new Vector3(-3f, 1f, 0f);
-        private static readonly Vector3 DummyStart  = new Vector3( 3f, 1f, 0f);
+        public static readonly Color PlayerColor = new(0.2f, 0.6f, 1f, 1f);
+        public static readonly Color OpponentColor = new(0.9f, 0.4f, 0.2f, 1f);
+        private static readonly Color FloorColor = new(0.25f, 0.27f, 0.30f, 1f);
+        private static readonly Color WallColor = new(0.18f, 0.19f, 0.22f, 1f);
+        private static readonly Color ObstacleColor = new(0.42f, 0.45f, 0.52f, 1f);
+        private static readonly Color HitboxColor = new(1f, 0.2f, 0.1f, 1f);
 
-        /// <summary>
-        /// Если в сцене уже есть Player/Dummy/Floor — пропускаем их создание.
-        /// </summary>
-        public static void Build(bool addOnlyMissing = true)
+        private const float WallHeight = 1.2f;
+        private const float WallThickness = 0.5f;
+        private const float ObstacleHeight = 1.6f;
+        private const string ArenaRootName = "Arena";
+
+        public sealed class Result
         {
-            EnsureLight();
-            EnsureFloor(addOnlyMissing);
+            public MatchRunner Runner;
+            public readonly FighterView[] Views = new FighterView[GameState.FighterCount];
+            public MobaCamera Camera;
 
-            var player = EnsurePlayer(addOnlyMissing);
-            EnsureDummy(addOnlyMissing);
-
-            EnsureMainCamera(player);
+            public FighterView Local => Views[Runner.LocalPlayer];
+            public FighterView Opponent => Views[Runner.Opponent];
         }
 
-        // ---------- Light ----------
+        public static Result Build(FighterDefinition player = null, FighterDefinition opponent = null, int localPlayer = 0,
+                                   BotMode botMode = BotMode.Idle, bool training = false,
+                                   FighterView playerViewPrefab = null, FighterView opponentViewPrefab = null)
+        {
+            var result = new Result();
+            EnsureLight();
+
+            result.Runner = Object.FindAnyObjectByType<MatchRunner>();
+            if (result.Runner == null) result.Runner = CreateRunner(player, opponent, localPlayer, botMode, training);
+            var runner = result.Runner;
+
+            var arena = runner.Sim.Setup.Arena;
+            EnsureFloor(arena);
+            BuildArenaGeometry(arena);
+
+            for (int i = 0; i < GameState.FighterCount; i++)
+            {
+                bool local = i == runner.LocalPlayer;
+                var prefab = local ? playerViewPrefab : opponentViewPrefab;
+                result.Views[i] = CreateView(runner, i, prefab, local ? PlayerColor : OpponentColor, local ? "Player" : "Opponent");
+            }
+
+            result.Camera = EnsureMainCamera(result.Local.transform, runner.LocalPlayer);
+            return result;
+        }
+
+        public static MatchRunner CreateRunner(FighterDefinition player, FighterDefinition opponent, int localPlayer, BotMode botMode, bool training)
+        {
+            var go = new GameObject("_Match");
+            go.SetActive(false); // Configure РґРѕ Awake
+            var runner = go.AddComponent<MatchRunner>();
+            runner.Configure(player, opponent, localPlayer, botMode, training);
+            go.SetActive(true);
+            return runner;
+        }
+
+        // ---------- Р‘РѕР№С†С‹ ----------
+
+        public static FighterView CreateView(MatchRunner runner, int index, FighterView prefab, Color color, string name)
+        {
+            FighterView view;
+            if (prefab != null)
+            {
+                view = Object.Instantiate(prefab);
+            }
+            else
+            {
+                var root = new GameObject();
+                root.SetActive(false); // Awake РІРёРґР° РґРѕР»Р¶РµРЅ СѓРІРёРґРµС‚СЊ СѓР¶Рµ РїРѕРєСЂР°С€РµРЅРЅС‹Р№ РјРµС€
+                var mesh = CreatePrimitive(PrimitiveType.Capsule, "Mesh", root.transform, color);
+                mesh.transform.localPosition = new Vector3(0f, 1f, 0f);
+                var marker = CreatePrimitive(PrimitiveType.Cylinder, "HitboxMarker", root.transform, HitboxColor);
+                marker.SetActive(false);
+                view = root.AddComponent<FighterView>();
+                view.Setup(mesh.GetComponent<Renderer>(), marker.transform);
+                root.SetActive(true);
+            }
+            view.name = name;
+            view.Bind(runner, index);
+            return view;
+        }
+
+        // ---------- РђСЂРµРЅР° ----------
 
         private static void EnsureLight()
         {
@@ -51,212 +116,114 @@ namespace Game.UI
             light.shadows = LightShadows.Soft;
         }
 
-        // ---------- Floor ----------
-
-        private static void EnsureFloor(bool skipIfExists)
+        private static void EnsureFloor(ArenaSpec arena)
         {
-            if (skipIfExists && GameObject.Find("Floor") != null) return;
+            if (GameObject.Find("Floor") != null) return;
+            var size = ToWorld(arena.Max) - ToWorld(arena.Min);
+            var center = (ToWorld(arena.Max) + ToWorld(arena.Min)) * 0.5f;
+            var floor = CreatePrimitive(PrimitiveType.Plane, "Floor", null, FloorColor);
+            floor.transform.position = center;
+            // Plane вЂ” 10Г—10 Рј; СЃ Р·Р°РїР°СЃРѕРј Р·Р° СЃС‚РµРЅР°РјРё, С‡С‚РѕР±С‹ РєСЂР°Р№ РЅРµ Р±С‹Р» РІРёРґРµРЅ РєР°РјРµСЂРѕР№.
+            floor.transform.localScale = new Vector3(size.x / 10f + 1f, 1f, size.z / 10f + 1f);
+        }
 
-            var floor = GameObject.CreatePrimitive(PrimitiveType.Plane);
-            floor.name = "Floor";
-            floor.transform.localScale = new Vector3(FloorSize / 10f, 1f, FloorSize / 10f); // Plane = 10x10 m по умолчанию
+        /// <summary> РЎС‚РµРЅС‹ РїРѕ РєСЂР°СЏРј Рё РїСЂРµРїСЏС‚СЃС‚РІРёСЏ вЂ” РѕРґРёРЅ РІ РѕРґРёРЅ СЃ РєРѕР»Р»РёР·РёСЏРјРё СЃРёРјСѓР»СЏС†РёРё. </summary>
+        public static GameObject BuildArenaGeometry(ArenaSpec arena)
+        {
+            var existing = GameObject.Find(ArenaRootName);
+            if (existing != null) return existing;
 
-            // Простая раскраска через PropertyBlock, чтобы не плодить материалы
-            var rend = floor.GetComponent<Renderer>();
-            if (rend != null)
+            var root = new GameObject(ArenaRootName);
+            var min = ToWorld(arena.Min);
+            var max = ToWorld(arena.Max);
+            var size = max - min;
+            var center = (min + max) * 0.5f;
+            float t = WallThickness;
+
+            CreateBlock(root.transform, "Wall_N", new Vector3(center.x, 0f, max.z + t * 0.5f), new Vector3(size.x + 2f * t, WallHeight, t), WallColor);
+            CreateBlock(root.transform, "Wall_S", new Vector3(center.x, 0f, min.z - t * 0.5f), new Vector3(size.x + 2f * t, WallHeight, t), WallColor);
+            CreateBlock(root.transform, "Wall_E", new Vector3(max.x + t * 0.5f, 0f, center.z), new Vector3(t, WallHeight, size.z), WallColor);
+            CreateBlock(root.transform, "Wall_W", new Vector3(min.x - t * 0.5f, 0f, center.z), new Vector3(t, WallHeight, size.z), WallColor);
+
+            for (int i = 0; i < arena.Obstacles.Length; i++)
             {
-                var block = new MaterialPropertyBlock();
-                rend.GetPropertyBlock(block);
-                if (rend.sharedMaterial != null)
+                var o = arena.Obstacles[i];
+                var pos = ToWorld(o.Center);
+                if (o.Shape == ObstacleShape.Circle)
                 {
-                    if (rend.sharedMaterial.HasProperty("_BaseColor"))
-                        block.SetColor("_BaseColor", new Color(0.25f, 0.27f, 0.30f, 1f));
-                    else if (rend.sharedMaterial.HasProperty("_Color"))
-                        block.SetColor("_Color", new Color(0.25f, 0.27f, 0.30f, 1f));
+                    float d = o.Radius.ToFloat() * 2f;
+                    var pillar = CreatePrimitive(PrimitiveType.Cylinder, $"Pillar_{i}", root.transform, ObstacleColor);
+                    pillar.transform.position = pos + Vector3.up * (ObstacleHeight * 0.5f);
+                    pillar.transform.localScale = new Vector3(d, ObstacleHeight * 0.5f, d); // С†РёР»РёРЅРґСЂ вЂ” 2 Рј РІ РІС‹СЃРѕС‚Сѓ
                 }
-                rend.SetPropertyBlock(block);
+                else
+                {
+                    var half = ToWorld(o.HalfExtents);
+                    CreateBlock(root.transform, $"Block_{i}", pos, new Vector3(half.x * 2f, ObstacleHeight, half.z * 2f), ObstacleColor);
+                }
             }
+            return root;
         }
 
-        // ---------- Player ----------
-
-        private static Fighter EnsurePlayer(bool skipIfExists)
+        private static void CreateBlock(Transform parent, string name, Vector3 groundCenter, Vector3 size, Color color)
         {
-            // Если в сцене уже есть локальный игрок — используем его
-            if (skipIfExists)
-            {
-                foreach (var f in Object.FindObjectsByType<Fighter>(FindObjectsSortMode.None))
-                    if (f.IsLocalPlayer) return f;
-            }
-
-            // Root
-            var root = new GameObject("Player");
-            root.transform.position = PlayerStart;
-
-            // Mesh (Capsule visual)
-            var mesh = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-            mesh.name = "Mesh";
-            mesh.transform.SetParent(root.transform, false);
-            // Удаляем коллайдер у визуала — мы поставим свой
-            var meshCol = mesh.GetComponent<Collider>();
-            if (meshCol != null) Object.Destroy(meshCol);
-            TintRenderer(mesh, new Color(0.2f, 0.6f, 1f, 1f));
-
-            // Physics
-            var rb = root.AddComponent<Rigidbody>();
-            rb.mass = 70f;
-            rb.freezeRotation = true;
-            rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
-
-            // Body collider (для столкновений со стенами / землёй)
-            var bodyCol = root.AddComponent<CapsuleCollider>();
-            bodyCol.height = 2f;
-            bodyCol.radius = 0.45f;
-            bodyCol.center = new Vector3(0f, 0f, 0f);
-
-            // Health & Stamina
-            var health = root.AddComponent<Health>();
-            var stamina = root.AddComponent<Stamina>();
-
-            // Hurtbox (триггер)
-            var hurtGo = new GameObject("Hurtbox");
-            hurtGo.transform.SetParent(root.transform, false);
-            var hurtCol = hurtGo.AddComponent<CapsuleCollider>();
-            hurtCol.isTrigger = true;
-            hurtCol.height = 2f;
-            hurtCol.radius = 0.5f;
-            var hurtbox = hurtGo.AddComponent<Hurtbox>();
-
-            // Hitbox (триггер впереди, выключенный)
-            var hitGo = new GameObject("Hitbox");
-            hitGo.transform.SetParent(root.transform, false);
-            hitGo.transform.localPosition = new Vector3(0f, 0f, 1.0f); // впереди
-            var hitCol = hitGo.AddComponent<BoxCollider>();
-            hitCol.isTrigger = true;
-            hitCol.size = new Vector3(1.2f, 1.6f, 1.2f);
-            hitCol.enabled = false; // выключаем — Hitbox.Activate() включит
-            var hitbox = hitGo.AddComponent<Hitbox>();
-
-            // Fighter — настраиваем через SerializedField через reflection
-            var fighter = root.AddComponent<Fighter>();
-            SetPrivateField(fighter, "_health", health);
-            SetPrivateField(fighter, "_stamina", stamina);
-            SetPrivateField(fighter, "_hurtbox", hurtbox);
-            SetPrivateField(fighter, "_hitbox", hitbox);
-            SetPrivateField(fighter, "_rigidbody", rb);
-
-            // Атаки из Resources
-            var lightAttack = Resources.Load<AttackData>("Attacks/Attack_Light");
-            var heavyAttack = Resources.Load<AttackData>("Attacks/Attack_Heavy");
-            if (lightAttack != null) SetPrivateField(fighter, "_lightAttack", lightAttack);
-            if (heavyAttack != null) SetPrivateField(fighter, "_heavyAttack", heavyAttack);
-
-            // Owner для hitbox/hurtbox
-            SetPrivateField(hitbox, "_owner", root);
-            SetPrivateField(hurtbox, "_owner", root);
-            SetPrivateField(hurtbox, "_health", health);
-
-            fighter.IsLocalPlayer = true;
-
-            return fighter;
+            var go = CreatePrimitive(PrimitiveType.Cube, name, parent, color);
+            go.transform.position = groundCenter + Vector3.up * (size.y * 0.5f);
+            go.transform.localScale = size;
         }
 
-        // ---------- Dummy ----------
+        // ---------- РљР°РјРµСЂР° ----------
 
-        private static void EnsureDummy(bool skipIfExists)
-        {
-            if (skipIfExists && GameObject.Find("Dummy") != null) return;
-
-            var root = new GameObject("Dummy");
-            root.transform.position = DummyStart;
-
-            var mesh = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-            mesh.name = "Mesh";
-            mesh.transform.SetParent(root.transform, false);
-            var meshCol = mesh.GetComponent<Collider>();
-            if (meshCol != null) Object.Destroy(meshCol);
-            TintRenderer(mesh, new Color(0.8f, 0.4f, 0.2f, 1f));
-
-            // Body collider (не trigger — чтобы об него можно было упереться)
-            var bodyCol = root.AddComponent<CapsuleCollider>();
-            bodyCol.height = 2f;
-            bodyCol.radius = 0.45f;
-
-            // Health + DummyTarget
-            var health = root.AddComponent<Health>();
-            var dt = root.AddComponent<DummyTarget>();
-            // _renderer в DummyTarget — найдётся через GetComponentInChildren в Awake().
-
-            // Hurtbox (триггер)
-            var hurtGo = new GameObject("Hurtbox");
-            hurtGo.transform.SetParent(root.transform, false);
-            var hurtCol = hurtGo.AddComponent<CapsuleCollider>();
-            hurtCol.isTrigger = true;
-            hurtCol.height = 2f;
-            hurtCol.radius = 0.5f;
-            var hurtbox = hurtGo.AddComponent<Hurtbox>();
-            SetPrivateField(hurtbox, "_owner", root);
-            SetPrivateField(hurtbox, "_health", health);
-        }
-
-        // ---------- Camera ----------
-
-        private static void EnsureMainCamera(Fighter player)
+        private static MobaCamera EnsureMainCamera(Transform target, int localPlayer)
         {
             var cam = Camera.main;
-            GameObject camGo;
             if (cam == null)
             {
-                camGo = new GameObject("Main Camera", typeof(Camera), typeof(AudioListener));
-                camGo.tag = "MainCamera";
-                cam = camGo.GetComponent<Camera>();
-            }
-            else
-            {
-                camGo = cam.gameObject;
+                var go = new GameObject("Main Camera", typeof(Camera), typeof(AudioListener)) { tag = "MainCamera" };
+                cam = go.GetComponent<Camera>();
             }
 
-            // Базовые настройки камеры
             cam.clearFlags = CameraClearFlags.SolidColor;
             cam.backgroundColor = new Color(0.1f, 0.12f, 0.16f, 1f);
             cam.fieldOfView = 45f;
             cam.nearClipPlane = 0.1f;
             cam.farClipPlane = 200f;
 
-            // Follow-компонент
-            var follow = camGo.GetComponent<SimpleFollowCamera>();
-            if (follow == null) follow = camGo.AddComponent<SimpleFollowCamera>();
-            if (player != null) follow.SetTarget(player.transform);
+            if (!cam.TryGetComponent<MobaCamera>(out var moba)) moba = cam.gameObject.AddComponent<MobaCamera>();
+            moba.SetSide(localPlayer);
+            moba.SetTarget(target);
+            return moba;
         }
 
         // ---------- Helpers ----------
 
-        private static void TintRenderer(GameObject go, Color color)
+        public static Vector3 ToWorld(FixVec2 v) => new(v.X.ToFloat(), 0f, v.Y.ToFloat());
+
+        private static GameObject CreatePrimitive(PrimitiveType type, string name, Transform parent, Color color)
         {
-            var rend = go.GetComponent<Renderer>();
-            if (rend == null) return;
-            var block = new MaterialPropertyBlock();
-            rend.GetPropertyBlock(block);
-            if (rend.sharedMaterial != null)
+            var go = GameObject.CreatePrimitive(type);
+            go.name = name;
+            if (parent != null) go.transform.SetParent(parent, false);
+            // РљРѕР»Р»Р°Р№РґРµСЂС‹ PhysX РІ РіРµР№РјРїР»РµРµ РЅРµ РЅСѓР¶РЅС‹: СЃС‚РѕР»РєРЅРѕРІРµРЅРёСЏ СЃС‡РёС‚Р°РµС‚ СЃРёРјСѓР»СЏС†РёСЏ.
+            var col = go.GetComponent<Collider>();
+            if (col != null)
             {
-                if (rend.sharedMaterial.HasProperty("_BaseColor"))
-                    block.SetColor("_BaseColor", color);
-                else if (rend.sharedMaterial.HasProperty("_Color"))
-                    block.SetColor("_Color", color);
+                if (Application.isPlaying) Object.Destroy(col);
+                else Object.DestroyImmediate(col);
             }
-            rend.SetPropertyBlock(block);
+            Tint(go.GetComponent<Renderer>(), color);
+            return go;
         }
 
-        private static void SetPrivateField(object target, string fieldName, object value)
+        /// <summary> РљСЂР°СЃРёРј С‡РµСЂРµР· PropertyBlock, С‡С‚РѕР±С‹ РЅРµ РїР»РѕРґРёС‚СЊ РёРЅСЃС‚Р°РЅСЃС‹ РјР°С‚РµСЂРёР°Р»Р°. </summary>
+        public static void Tint(Renderer rend, Color color)
         {
-            if (target == null) return;
-            var t = target.GetType();
-            while (t != null)
-            {
-                var f = t.GetField(fieldName, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                if (f != null) { f.SetValue(target, value); return; }
-                t = t.BaseType;
-            }
+            if (rend == null || rend.sharedMaterial == null) return;
+            var block = new MaterialPropertyBlock();
+            rend.GetPropertyBlock(block);
+            if (rend.sharedMaterial.HasProperty("_BaseColor")) block.SetColor("_BaseColor", color);
+            else if (rend.sharedMaterial.HasProperty("_Color")) block.SetColor("_Color", color);
+            rend.SetPropertyBlock(block);
         }
     }
 }

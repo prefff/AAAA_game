@@ -1,108 +1,49 @@
 ﻿using Game.Characters;
-using Game.Combat;
 using UnityEngine;
 using UnityEngine.UI;
 
 namespace Game.UI
 {
     /// <summary>
-    /// Простой биндер HUD: показывает HP / стамину одного бойца.
-    /// Привязать к Canvas, в инспекторе указать ссылки на _fighter и два Image (Filled).
-    /// Использует и события (для моментального отклика), и polling каждый кадр (на случай если
-    /// Image настроен не как Filled или события не сработали).
+    /// Полоски HP / стамины / маны одного бойца. Значения читаются из состояния симуляции каждый кадр:
+    /// своего состояния у HUD нет, поэтому он не может разойтись с боем.
     /// </summary>
     public class FighterHUD : MonoBehaviour
     {
-        [SerializeField] private Fighter _fighter;
         [SerializeField] private Image _healthFill;
         [SerializeField] private Image _staminaFill;
+        [SerializeField] private Image _manaFill;
 
-        /// <summary> Программный способ привязать ссылки до OnEnable. </summary>
-        public void Bind(Fighter fighter, Image healthFill, Image staminaFill)
+        private MatchRunner _runner;
+        private int _index;
+
+        public void Bind(MatchRunner runner, int index, Image healthFill, Image staminaFill, Image manaFill)
         {
-            _fighter = fighter;
+            _runner = runner;
+            _index = index;
             _healthFill = healthFill;
             _staminaFill = staminaFill;
-            // Если уже включён — переподписаться.
-            if (isActiveAndEnabled) { OnDisable(); OnEnable(); }
+            _manaFill = manaFill;
         }
 
-        private void OnEnable()
+        public float Health { get; private set; }
+
+        private void LateUpdate()
         {
-            TryAutoFindFighter();
-            // Подписываемся на события — для моментального отклика.
-            if (_fighter == null)
-            {
-                Debug.LogWarning("[FighterHUD] _fighter не назначен и не найден.", this);
-                return;
-            }
-            if (_fighter.Health != null)
-            {
-                _fighter.Health.OnHealthChanged.AddListener(SetHealth);
-                SetHealth(_fighter.Health.Normalized);
-            }
-            if (_fighter.Stamina != null)
-            {
-                _fighter.Stamina.OnStaminaChanged.AddListener(SetStamina);
-                SetStamina(_fighter.Stamina.Normalized);
-            }
-            ForceFilled(_healthFill);
-            ForceFilled(_staminaFill);
+            if (_runner == null || _runner.State == null) return;
+            ref readonly var f = ref _runner.State.Fighters[_index];
+            var spec = _runner.Sim.Setup.Fighters[_index];
+            Health = Ratio(f.Health.ToFloat(), spec.MaxHealth.ToFloat());
+            Set(_healthFill, Health);
+            Set(_staminaFill, Ratio(f.Stamina.ToFloat(), spec.MaxStamina.ToFloat()));
+            Set(_manaFill, Ratio(f.Mana.ToFloat(), spec.MaxMana.ToFloat()));
         }
 
-        private void TryAutoFindFighter()
-        {
-            if (_fighter != null) return;
-            var fighters = FindObjectsByType<Fighter>(FindObjectsSortMode.None);
-            foreach (var f in fighters)
-                if (f.IsLocalPlayer) { _fighter = f; return; }
-        }
+        private static float Ratio(float value, float max) => max <= 0f ? 0f : Mathf.Clamp01(value / max);
 
-        private void OnDisable()
+        private static void Set(Image fill, float value)
         {
-            if (_fighter == null) return;
-            if (_fighter.Health != null) _fighter.Health.OnHealthChanged.RemoveListener(SetHealth);
-            if (_fighter.Stamina != null) _fighter.Stamina.OnStaminaChanged.RemoveListener(SetStamina);
-        }
-
-        private void Update()
-        {
-            // Подстраховка: каждый кадр синхронизируем полоски с реальным значением.
-            // Это бесплатно по производительности и страхует от любых "молчаливых" сценариев.
-            if (_fighter == null) return;
-            if (_fighter.Health  != null) SetHealth(_fighter.Health.Normalized);
-            if (_fighter.Stamina != null) SetStamina(_fighter.Stamina.Normalized);
-        }
-
-        private void SetHealth(float n)
-        {
-            if (_healthFill != null) _healthFill.fillAmount = Mathf.Clamp01(n);
-        }
-
-        private void SetStamina(float n)
-        {
-            if (_staminaFill != null) _staminaFill.fillAmount = Mathf.Clamp01(n);
-        }
-
-        /// <summary>
-        /// Если поле Image не настроено как Filled — fillAmount ничего не делает.
-        /// Принудительно переключаем тип на Filled / Horizontal, чтобы полоска работала.
-        /// Также назначаем fallback белый sprite, если sprite не задан — без sprite
-        /// инспектор не показывает Fill Amount и Image вообще не рендерится.
-        /// </summary>
-        private static void ForceFilled(Image img)
-        {
-            if (img == null) return;
-            if (img.sprite == null)
-            {
-                img.sprite = ArenaBootstrap.MakeWhiteSprite();
-            }
-            if (img.type != Image.Type.Filled)
-            {
-                img.type = Image.Type.Filled;
-                img.fillMethod = Image.FillMethod.Horizontal;
-                img.fillOrigin = (int)Image.OriginHorizontal.Left;
-            }
+            if (fill != null && !Mathf.Approximately(fill.fillAmount, value)) fill.fillAmount = value;
         }
     }
 }

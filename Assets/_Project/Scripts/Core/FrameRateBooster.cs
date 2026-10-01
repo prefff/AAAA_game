@@ -1,24 +1,28 @@
-using UnityEngine;
+п»їusing UnityEngine;
 
 namespace Game.Core
 {
     /// <summary>
-    /// Снимает ограничение FPS на мобилках и пытается использовать максимальную частоту экрана.
-    /// Unity по умолчанию ставит targetFrameRate = 30 на iOS/Android (для экономии батареи),
-    /// поэтому на устройствах с 90/120 Гц картинка выглядит "залипающей".
+    /// РЎРЅРёРјР°РµС‚ РѕРіСЂР°РЅРёС‡РµРЅРёРµ FPS РЅР° РјРѕР±РёР»РєР°С… Рё РїС‹С‚Р°РµС‚СЃСЏ РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РјР°РєСЃРёРјР°Р»СЊРЅСѓСЋ С‡Р°СЃС‚РѕС‚Сѓ СЌРєСЂР°РЅР°.
+    /// Unity РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ СЃС‚Р°РІРёС‚ targetFrameRate = 30 РЅР° iOS/Android (РґР»СЏ СЌРєРѕРЅРѕРјРёРё Р±Р°С‚Р°СЂРµРё),
+    /// РїРѕСЌС‚РѕРјСѓ РЅР° СѓСЃС‚СЂРѕР№СЃС‚РІР°С… СЃ 90/120 Р“С† РєР°СЂС‚РёРЅРєР° РІС‹РіР»СЏРґРёС‚ "Р·Р°Р»РёРїР°СЋС‰РµР№".
     ///
-    /// Установка: один объект на сцену (или вызов из любого bootstrap-компонента).
+    /// РЈСЃС‚Р°РЅРѕРІРєР°: РѕРґРёРЅ РѕР±СЉРµРєС‚ РЅР° СЃС†РµРЅСѓ (РёР»Рё РІС‹Р·РѕРІ РёР· Р»СЋР±РѕРіРѕ bootstrap-РєРѕРјРїРѕРЅРµРЅС‚Р°).
     /// </summary>
     public static class FrameRateBooster
     {
         /// <summary>
-        /// Применяет настройки максимального FPS.
-        /// Если передан 0 / отрицательное — пытаемся использовать частоту экрана устройства.
+        /// РџСЂРёРјРµРЅСЏРµС‚ РЅР°СЃС‚СЂРѕР№РєРё РјР°РєСЃРёРјР°Р»СЊРЅРѕРіРѕ FPS.
+        /// Р•СЃР»Рё РїРµСЂРµРґР°РЅ 0 / РѕС‚СЂРёС†Р°С‚РµР»СЊРЅРѕРµ вЂ” РїС‹С‚Р°РµРјСЃСЏ РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ С‡Р°СЃС‚РѕС‚Сѓ СЌРєСЂР°РЅР° СѓСЃС‚СЂРѕР№СЃС‚РІР°.
         /// </summary>
-        public static void Apply(int targetFps = 0)
+        public static void Apply(int targetFps = 0, bool disableVSync = false)
         {
-            // Отключаем VSync — иначе targetFrameRate игнорируется и FPS привязан к VSync.
-            QualitySettings.vSyncCount = 0;
+            // VSync РѕС‚РєР»СЋС‡Р°РµРј С‚РѕР»СЊРєРѕ РµСЃР»Рё СЏРІРЅРѕ РїРѕРїСЂРѕСЃРёР»Рё. РќР° РјРѕР±РёР»РєР°С… Рё РІ СЂРµРґР°РєС‚РѕСЂРµ
+            // Р»СѓС‡С€Рµ РѕСЃС‚Р°РІРёС‚СЊ СЃРёСЃС‚РµРјРЅС‹Р№ VSync, Р° targetFrameRate РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РєР°Рє "РїРѕС‚РѕР»РѕРє".
+            if (disableVSync)
+            {
+                QualitySettings.vSyncCount = 0;
+            }
 
             int fps;
             if (targetFps > 0)
@@ -27,19 +31,24 @@ namespace Game.Core
             }
             else
             {
-                // Берём refresh rate экрана; на 120-герцовых телефонах будет 120.
-                // Screen.currentResolution.refreshRateRatio — современный API (Unity 2022.2+).
-#if UNITY_2022_2_OR_NEWER
-                var rate = Screen.currentResolution.refreshRateRatio;
-                fps = (int)System.Math.Round(rate.value);
-#else
-                fps = Screen.currentResolution.refreshRate;
-#endif
-                // Подстраховка: если устройство сообщает 0 (бывает в эмуляторе), ставим 60.
+                fps = MaxRefreshRate();
+                // РџРѕРґСЃС‚СЂР°С…РѕРІРєР°: РµСЃР»Рё СѓСЃС‚СЂРѕР№СЃС‚РІРѕ СЃРѕРѕР±С‰Р°РµС‚ 0 (Р±С‹РІР°РµС‚ РІ СЌРјСѓР»СЏС‚РѕСЂРµ), СЃС‚Р°РІРёРј 60.
                 if (fps <= 0) fps = 60;
             }
 
             Application.targetFrameRate = fps;
+        }
+
+        /// <summary>
+        /// РњР°РєСЃРёРјР°Р»СЊРЅР°СЏ С‡Р°СЃС‚РѕС‚Р° СЌРєСЂР°РЅР°. РўРµРєСѓС‰РёР№ СЂРµР¶РёРј РјРѕР¶РµС‚ Р±С‹С‚СЊ РЅРёР¶Рµ РјР°РєСЃРёРјСѓРјР°: Android РґРµСЂР¶РёС‚ 60 Р“С†, РїРѕРєР°
+        /// РїСЂРёР»РѕР¶РµРЅРёРµ РЅРµ РїРѕРїСЂРѕСЃРёС‚ Р±РѕР»СЊС€Рµ, вЂ” Р° РїСЂРѕСЃРёРј РјС‹ С‡РµСЂРµР· targetFrameRate, РїРѕСЌС‚РѕРјСѓ Р±РµСЂС‘Рј Р»СѓС‡С€РёР№ РёР· СЂРµР¶РёРјРѕРІ.
+        /// </summary>
+        public static int MaxRefreshRate()
+        {
+            double best = Screen.currentResolution.refreshRateRatio.value;
+            foreach (var r in Screen.resolutions)
+                if (r.refreshRateRatio.value > best) best = r.refreshRateRatio.value;
+            return (int)System.Math.Round(best);
         }
     }
 }

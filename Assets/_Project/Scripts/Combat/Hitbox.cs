@@ -12,12 +12,15 @@ namespace Game.Combat
     public class Hitbox : MonoBehaviour
     {
         [SerializeField] private GameObject _owner;
-        [SerializeField] private LayerMask _hurtboxLayers = ~0;
+        [SerializeField] private LayerMask _hurtboxLayers;
         [SerializeField] private bool _startInactive = true;
         [Tooltip("Логировать каждое попадание в Console.")]
         [SerializeField] private bool _debugLog = false;
         [Tooltip("Рисовать gizmo хитбокса в Scene-view (красный когда активен, серый когда нет).")]
         [SerializeField] private bool _debugDrawGizmo = true;
+
+        /// <summary> Доля knockback, которая проходит через блок. </summary>
+        private const float BlockKnockbackMultiplier = 0.3f;
 
         private AttackData _currentAttack;
         private Collider _collider;
@@ -35,10 +38,17 @@ namespace Game.Combat
 
         private void Awake()
         {
-            _collider = GetComponent<Collider>();
+            EnsureCollider();
             _collider.isTrigger = true;
+            if (_hurtboxLayers == 0)
+                _hurtboxLayers = LayerMask.GetMask("Hurtbox");
+            if (_hurtboxLayers == 0)
+                Debug.LogError("[Hitbox] Слой 'Hurtbox' не найден (Project Settings → Tags and Layers) — удары не будут регистрироваться.", this);
             if (_startInactive) _collider.enabled = false;
         }
+
+        /// <summary> Программная настройка владельца (для процедурной сборки бойца). </summary>
+        public void SetOwner(GameObject owner) => _owner = owner;
 
         /// <summary>
         /// Активировать хитбокс на time секунд с указанной AttackData.
@@ -46,6 +56,7 @@ namespace Game.Combat
         /// </summary>
         public void Activate(AttackData attack)
         {
+            EnsureCollider();
             _currentAttack = attack;
             _alreadyHit.Clear();
             _collider.enabled = true;
@@ -57,9 +68,16 @@ namespace Game.Combat
 
         public void Deactivate()
         {
+            EnsureCollider();
             _collider.enabled = false;
             _currentAttack = null;
             _alreadyHit.Clear();
+        }
+
+        // Fighter (на корне) может вызвать Deactivate из OnEnable раньше, чем отработает Awake этого дочернего объекта.
+        private void EnsureCollider()
+        {
+            if (_collider == null) _collider = GetComponent<Collider>();
         }
 
         private void TryHitOverlapping()
@@ -119,13 +137,16 @@ namespace Game.Combat
             // --- 2) i-frames (уклонение): полный игнор ---
             if (hurt.HasIFrames) return;
 
-            // --- 3) Блок: уменьшаем урон ---
+            // --- 3) Блок: уменьшаем урон и knockback, вместо hitstun — blockstun ---
             if (hurt.IsBlocking)
             {
-                float blocked = _currentAttack.Damage * (1f - hurt.BlockDamageMultiplier);
-                float passed = _currentAttack.Damage - blocked;
+                float passed = _currentAttack.Damage * hurt.BlockDamageMultiplier;
+                float blocked = _currentAttack.Damage - passed;
                 if (hurt.Health != null && passed > 0f)
-                    hurt.Health.TakeDamage(passed, Owner, hitPoint);
+                    hurt.Health.TakeDamage(passed, _currentAttack, Owner, hitPoint);
+
+                ApplyKnockback(other, hurt, _currentAttack.Knockback * BlockKnockbackMultiplier);
+                EventBus.Raise(new HitstunRequestedEvent(hurt.Owner, _currentAttack.BlockstunFrames / 60f, isBlockstun: true));
                 EventBus.Raise(new AttackBlockedEvent(Owner, hurt.Owner, blocked));
                 return;
             }
@@ -133,13 +154,36 @@ namespace Game.Combat
             // --- 4) Полный урон ---
             if (hurt.Health != null)
             {
-                hurt.Health.TakeDamage(_currentAttack.Damage, Owner, hitPoint);
+                hurt.Health.TakeDamage(_currentAttack.Damage, _currentAttack, Owner, hitPoint);
                 if (_debugLog) Debug.Log($"[Hitbox] {Owner.name} нанёс {_currentAttack.Damage} урона по {hurt.Owner.name}. HP: {hurt.Health.Current}/{hurt.Health.Max}", hurt.Owner);
             }
             else
             {
                 if (_debugLog) Debug.LogWarning($"[Hitbox] Попал по {hurt.Owner.name}, но у него нет Health!", hurt.Owner);
             }
+
+            ApplyKnockback(other, hurt, _currentAttack.Knockback);
+            if (hurt.Health == null || hurt.Health.IsAlive)
+                EventBus.Raise(new HitstunRequestedEvent(hurt.Owner, _currentAttack.HitstunFrames / 60f, isBlockstun: false));
+        }
+
+        /// <summary> Отбросить цель от атакующего. speed — добавочная скорость в м/с (не зависит от массы). </summary>
+        private void ApplyKnockback(Collider hurtCollider, Hurtbox hurt, float speed)
+        {
+            if (speed <= 0f) return;
+            var rb = hurtCollider.attachedRigidbody;
+            if (rb == null || rb.isKinematic) return;
+
+            Vector3 dir = rb.position - Owner.transform.position;
+            dir.y = 0f;
+            if (dir.sqrMagnitude < 0.0001f)
+                dir = Owner.transform.forward;
+            dir.Normalize();
+
+            var preVel = rb.linearVelocity;
+            rb.AddForce(dir * speed, ForceMode.VelocityChange);
+            if (_debugLog)
+                Debug.Log($"[Hitbox] Knockback {hurt.Owner.name}: speed={speed:F2} dir={dir} preVel={preVel:F2}", hurt.Owner);
         }
 
         private void OnDrawGizmos()

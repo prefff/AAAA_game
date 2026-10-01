@@ -5,7 +5,8 @@
         "Game.Core",
         "Game.Combat",
         "Game.Input",
-        "Game.Characters"
+        "Game.Characters",
+        "Game.Simulation"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

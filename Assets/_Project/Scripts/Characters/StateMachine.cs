@@ -2,7 +2,11 @@
 
 namespace Game.Characters
 {
-    /// <summary> Базовое состояние конечного автомата. </summary>
+    /// <summary>
+    /// Базовое состояние конечного автомата.
+    /// Всё, что состояние захватывает в OnEnter (флаги Hurtbox, подписки EventBus), оно обязано вернуть в OnExit:
+    /// StateMachine гарантирует вызов OnExit и при смене состояния, и при остановке (<see cref="StateMachine.Stop"/>).
+    /// </summary>
     public abstract class FighterState
     {
         protected Fighter Fighter;
@@ -48,14 +52,33 @@ namespace Game.Characters
             Current.OnEnter();
         }
 
+        /// <summary> Выйти из текущего состояния без входа в новое (выключение/уничтожение бойца). </summary>
+        public void Stop()
+        {
+            var current = Current;
+            Current = null;
+            current?.OnExit();
+        }
+
         public void Tick(float dt) => Current?.Tick(dt);
         public void FixedTick(float fdt) => Current?.FixedTick(fdt);
 
-        public void HandleCommand(Game.Input.InputCommand cmd)
+        /// <summary>
+        /// Передать команду текущему состоянию. Возвращает true, если команда принята (состояние вернуло следующее).
+        /// Если состояние вернуло само себя — оно перезапускается (OnExit → OnEnter): так удар отменяется в другой удар.
+        /// </summary>
+        public bool HandleCommand(Game.Input.InputCommand cmd)
         {
-            if (Current == null) return;
+            if (Current == null) return false;
             var next = Current.HandleCommand(cmd);
-            if (next != null) Change(next);
+            if (next == null) return false;
+            if (next == Current)
+            {
+                Current.OnExit();
+                Current.OnEnter();
+            }
+            else Change(next);
+            return true;
         }
     }
 }

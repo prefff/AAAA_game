@@ -18,26 +18,43 @@ namespace Game.Combat
         [SerializeField] private Color _hitColor = Color.red;
         [SerializeField] private float _hitFlashDuration = 0.08f;
 
+        private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
+        private static readonly int ColorId = Shader.PropertyToID("_Color");
+
         private Health _health;
+        private float _lastNormalized = 1f;
         private Color _originalColor;
-        private Material _materialInstance;
+        private int _colorId = -1;
+        private MaterialPropertyBlock _block;
         private Coroutine _flashRoutine;
 
         private void Awake()
         {
             _health = GetComponent<Health>();
             _health.OnDied.AddListener(OnDied);
-            _health.OnHealthChanged.AddListener(_ => Flash());
+            _health.OnHealthChanged.AddListener(OnHealthChanged);
 
             if (_renderer == null) _renderer = GetComponentInChildren<Renderer>();
-            if (_renderer != null)
+            var mat = _renderer != null ? _renderer.sharedMaterial : null;
+            if (mat != null)
             {
-                _materialInstance = _renderer.material; // создаёт instance, чтобы не трогать общий материал
-                if (_materialInstance.HasProperty("_BaseColor"))
-                    _originalColor = _materialInstance.GetColor("_BaseColor");
-                else if (_materialInstance.HasProperty("_Color"))
-                    _originalColor = _materialInstance.GetColor("_Color");
+                // Цвет меняем через PropertyBlock: не создаём инстанс материала и не конфликтуем
+                // с покраской из ArenaBuilder (она тоже через PropertyBlock).
+                if (mat.HasProperty(BaseColorId)) _colorId = BaseColorId;
+                else if (mat.HasProperty(ColorId)) _colorId = ColorId;
+
+                _block = new MaterialPropertyBlock();
+                _renderer.GetPropertyBlock(_block);
+                if (_colorId != -1)
+                    _originalColor = _block.HasColor(_colorId) ? _block.GetColor(_colorId) : mat.GetColor(_colorId);
             }
+        }
+
+        private void OnHealthChanged(float normalized)
+        {
+            // Вспыхиваем только от урона, не от лечения/респауна.
+            if (normalized < _lastNormalized) Flash();
+            _lastNormalized = normalized;
         }
 
         private void OnDied()
@@ -56,7 +73,7 @@ namespace Game.Combat
 
         private void Flash()
         {
-            if (_renderer == null || _materialInstance == null) return;
+            if (_colorId == -1) return;
             if (_flashRoutine != null) StopCoroutine(_flashRoutine);
             _flashRoutine = StartCoroutine(FlashRoutine());
         }
@@ -70,10 +87,9 @@ namespace Game.Combat
 
         private void SetColor(Color c)
         {
-            if (_materialInstance.HasProperty("_BaseColor"))
-                _materialInstance.SetColor("_BaseColor", c);
-            else if (_materialInstance.HasProperty("_Color"))
-                _materialInstance.SetColor("_Color", c);
+            _renderer.GetPropertyBlock(_block);
+            _block.SetColor(_colorId, c);
+            _renderer.SetPropertyBlock(_block);
         }
     }
 }

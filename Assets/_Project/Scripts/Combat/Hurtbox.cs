@@ -25,6 +25,13 @@ namespace Game.Combat
         /// <summary> Множитель урона при блоке (0..1). </summary>
         [Range(0f, 1f)] public float BlockDamageMultiplier = 0.3f;
 
+        /// <summary> Программная настройка (для процедурной сборки бойца). </summary>
+        public void Setup(GameObject owner, Health health)
+        {
+            _owner = owner;
+            _health = health;
+        }
+
         private void Reset()
         {
             _owner = transform.root != null ? transform.root.gameObject : gameObject;

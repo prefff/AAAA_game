@@ -1,155 +1,152 @@
-﻿using System.Collections.Generic;
-using Game.Core;
+﻿using System;
 using UnityEngine;
 
 namespace Game.Input
 {
     /// <summary>
-    /// Распознаёт жесты в правой половине экрана:
-    ///   - Тап (короткое касание, малое смещение)          ? LightAttack
-    ///   - Долгий тап / удержание                          ? BlockStart / BlockEnd
-    ///   - Свайп (быстрое движение в одну сторону)         ? Dodge в направлении свайпа
-    ///   - Резкий свайп навстречу (короткий и быстрый)     ? Parry (если зажат BlockStart — пока упрощённо)
-    ///   - Двойной тап                                     ? HeavyAttack
-    ///   - Зигзаг / круг (через GestureLibrary)            ? способности (TODO, hook готов)
+    /// Распознаватель жестов правой зоны по модели «сначала действие, потом уточнение»:
+    /// ложное срабатывание лучше задержки, поэтому команда уходит в первый же момент, когда она возможна,
+    /// а продолжение жеста отменяет её в другую.
     ///
-    /// На вход даём ScreenSpace позиции касания (через InputProvider / Input System).
-    /// На выход — публикуем CommandInputEvent через EventBus.
+    ///   касание                          → LightAttack сразу (startup удара — окно распознавания);
+    ///   сдвиг дальше порога              → Dodge сразу, в сторону сдвига (отменяет удар в startup);
+    ///   быстрый короткий flick           → Parry при отпускании (отменяет удар/начатое уклонение);
+    ///   удержание без сдвига             → BlockStart по порогу (отменяет удар в startup), отпускание → BlockEnd;
+    ///   удержание, потом сдвиг           → Dodge из блока;
+    ///   второй палец, пока первый на экране → HeavyAttack (отменяет лёгкий удар в startup), первый палец
+    ///                                      после этого жестов не даёт.
+    ///
+    /// Чистый C#: время, позиции и перевод направления в мир передаются снаружи, поэтому тестируется
+    /// на записанных последовательностях касаний без сцены. Время — шкала Time.realtimeSinceStartupAsDouble
+    /// (на ней же метки событий Input System). Направление в командах — мировое (x = X, y = Z).
     /// </summary>
-    public class GestureRecognizer : MonoBehaviour
+    public sealed class GestureRecognizer
     {
-        [Header("Зона жестов (правая половина экрана по умолчанию)")]
-        [Tooltip("Доля экрана по X, левее которой касания игнорируются (0..1). 0.5 = правая половина.")]
-        [Range(0f, 1f)] public float GestureZoneMinX = 0.5f;
+        private enum Phase { None, Pending, Dodging, Holding, Consumed }
 
-        [Header("Tap")]
-        [Tooltip("Максимальное смещение пальца, чтобы считаться тапом (в пикселях).")]
-        public float TapMaxMove = 30f;
-        [Tooltip("Максимальная длительность тапа, сек.")]
-        public float TapMaxDuration = 0.18f;
-        [Tooltip("Окно для двойного тапа, сек.")]
-        public float DoubleTapWindow = 0.25f;
+        private readonly GestureSettings _settings;
+        private readonly Action<InputCommand> _output;
 
-        [Header("Hold (block)")]
-        [Tooltip("Длительность удержания, после которой считается, что начат блок, сек.")]
-        public float HoldThreshold = 0.18f;
-
-        [Header("Swipe")]
-        [Tooltip("Минимальное расстояние свайпа в пикселях.")]
-        public float SwipeMinDistance = 80f;
-        [Tooltip("Максимальная длительность свайпа, сек.")]
-        public float SwipeMaxDuration = 0.30f;
-        [Tooltip("Очень быстрый и короткий 'flick' = парирование. Время в сек.")]
-        public float ParryFlickMaxDuration = 0.12f;
-        [Tooltip("Минимальная скорость flick для парирования (пикс/сек).")]
-        public float ParryFlickMinSpeed = 1500f;
-
-        // --- Состояние одного активного касания (упрощённо: один палец на правой зоне) ---
-        private bool _tracking;
+        private Phase _phase;
         private Vector2 _startPos;
-        private Vector2 _lastPos;
-        private float _startTime;
-        private bool _holdFired;
-        private float _lastTapTime = -10f;
+        private double _startTime;
+        private bool _blockActive;
 
-        /// <summary> Вызывается из InputProvider: палец впервые коснулся экрана. </summary>
-        public void OnTouchBegan(Vector2 screenPos)
+        /// <summary> Пикселей экрана в миллиметре (Screen.dpi / 25.4). </summary>
+        public float PixelsPerMm { get; set; } = 160f / 25.4f;
+
+        /// <summary>
+        /// Экранное направление (x = вправо, y = вверх) → мировое в плоскости XZ. Камера не вращается, поэтому
+        /// это фиксированное преобразование; по умолчанию — «вверх по экрану» = +Z.
+        /// </summary>
+        public Func<Vector2, Vector2> ScreenToWorld { get; set; } = d => d;
+
+        public GestureSettings Settings => _settings;
+        public bool IsTracking => _phase != Phase.None;
+
+        public GestureRecognizer(GestureSettings settings, Action<InputCommand> output)
         {
-            if (!IsInGestureZone(screenPos)) return;
-            _tracking = true;
+            _settings = settings != null ? settings : throw new ArgumentNullException(nameof(settings));
+            _output = output ?? throw new ArgumentNullException(nameof(output));
+        }
+
+        /// <summary> Основной палец коснулся правой зоны (проверку зоны делает провайдер). </summary>
+        public void TouchBegan(Vector2 screenPos, double time)
+        {
+            if (_phase != Phase.None) TouchCanceled(time); // новый жест без отпускания старого — закрываем старый
+            _phase = Phase.Pending;
             _startPos = screenPos;
-            _lastPos = screenPos;
-            _startTime = Time.unscaledTime;
-            _holdFired = false;
+            _startTime = time;
+            _blockActive = false;
+            Emit(CommandType.LightAttack, Vector2.zero, time, time);
         }
 
-        /// <summary> Палец двигается. </summary>
-        public void OnTouchMoved(Vector2 screenPos)
+        public void TouchMoved(Vector2 screenPos, double time)
         {
-            if (!_tracking) return;
-            _lastPos = screenPos;
+            if (_phase == Phase.None || _phase == Phase.Consumed) return;
 
-            // Hold-блок: палец почти не сдвинулся и держится дольше порога
-            if (!_holdFired &&
-                (screenPos - _startPos).sqrMagnitude < TapMaxMove * TapMaxMove &&
-                Time.unscaledTime - _startTime >= HoldThreshold)
+            if ((_phase == Phase.Pending || _phase == Phase.Holding) && MovedBeyondThreshold(screenPos))
             {
-                _holdFired = true;
-                Raise(CommandType.BlockStart, Vector2.zero);
-            }
-        }
-
-        /// <summary> Палец оторван от экрана. </summary>
-        public void OnTouchEnded(Vector2 screenPos)
-        {
-            if (!_tracking) return;
-            _tracking = false;
-
-            var delta = screenPos - _startPos;
-            float distance = delta.magnitude;
-            float duration = Time.unscaledTime - _startTime;
-
-            // Если уже шёл hold/block ? завершаем блок
-            if (_holdFired)
-            {
-                Raise(CommandType.BlockEnd, Vector2.zero);
+                _phase = Phase.Dodging;
+                Emit(CommandType.Dodge, WorldDirection(screenPos), _startTime, time);
                 return;
             }
+            Update(time);
+        }
 
-            // --- Tap / Double Tap ---
-            if (distance < TapMaxMove && duration < TapMaxDuration)
+        /// <summary> Каждый кадр, пока палец на экране: неподвижный палец событий не присылает, а удержание идёт по таймеру. </summary>
+        public void Update(double now)
+        {
+            if (_phase != Phase.Pending || now - _startTime < _settings.HoldThreshold) return;
+            _phase = Phase.Holding;
+            _blockActive = true;
+            // Распознать удержание можно было ровно в момент порога; ожидание кадра — задержка игры, а не жеста.
+            Emit(CommandType.BlockStart, Vector2.zero, _startTime, _startTime + _settings.HoldThreshold);
+        }
+
+        public void TouchEnded(Vector2 screenPos, double time)
+        {
+            if (_phase == Phase.None) return;
+            if (_phase == Phase.Pending && !MovedBeyondThreshold(screenPos)) Update(time);
+
+            var phase = _phase;
+            _phase = Phase.None;
+
+            if (_blockActive)
             {
-                if (Time.unscaledTime - _lastTapTime < DoubleTapWindow)
-                {
-                    Raise(CommandType.HeavyAttack, Vector2.zero);
-                    _lastTapTime = -10f; // сбрасываем, чтобы тройной тап не считался
-                }
-                else
-                {
-                    Raise(CommandType.LightAttack, Vector2.zero);
-                    _lastTapTime = Time.unscaledTime;
-                }
-                return;
+                _blockActive = false;
+                Emit(CommandType.BlockEnd, Vector2.zero, time, time);
+                if (phase == Phase.Holding) return;
             }
 
-            // --- Swipe / Flick ---
-            if (distance >= SwipeMinDistance && duration <= SwipeMaxDuration)
-            {
-                var dir = delta.normalized;
-                float speed = distance / Mathf.Max(0.001f, duration);
+            // Flick: сдвиг (уклонение уже начато) или резкий бросок пальца между событиями.
+            bool moved = phase == Phase.Dodging || (phase == Phase.Pending && MovedBeyondThreshold(screenPos));
+            if (!moved) return; // тап: удар уже идёт
 
-                // Очень быстрый короткий flick ? парирование
-                if (duration <= ParryFlickMaxDuration && speed >= ParryFlickMinSpeed)
-                {
-                    Raise(CommandType.Parry, dir);
-                    return;
-                }
-
-                // Обычный свайп ? уклонение в направлении свайпа
-                Raise(CommandType.Dodge, dir);
-                return;
-            }
-
-            // Иначе — игнорируем (слишком долго, слишком мало).
+            if (IsFlick(screenPos, time))
+                Emit(CommandType.Parry, Vector2.zero, _startTime, time);
+            else if (phase == Phase.Pending)
+                Emit(CommandType.Dodge, WorldDirection(screenPos), _startTime, time);
         }
 
-        public void OnTouchCanceled()
+        /// <summary> Касание прервано системой (уведомление, сворачивание): отпустить блок, если держали. </summary>
+        public void TouchCanceled(double time)
         {
-            if (_holdFired) Raise(CommandType.BlockEnd, Vector2.zero);
-            _tracking = false;
-            _holdFired = false;
+            if (_blockActive) Emit(CommandType.BlockEnd, Vector2.zero, time, time);
+            _blockActive = false;
+            _phase = Phase.None;
         }
 
-        private bool IsInGestureZone(Vector2 screenPos)
+        /// <summary> Второй палец коснулся правой зоны → тяжёлая атака. Основной палец больше жестов не даёт. </summary>
+        public void SecondaryTouchBegan(double time)
         {
-            float normX = screenPos.x / Mathf.Max(1f, Screen.width);
-            return normX >= GestureZoneMinX;
+            if (_phase == Phase.Pending) _phase = Phase.Consumed;
+            Emit(CommandType.HeavyAttack, Vector2.zero, time, time);
         }
 
-        private void Raise(CommandType type, Vector2 dir)
+        private bool MovedBeyondThreshold(Vector2 screenPos)
         {
-            var cmd = new InputCommand(type, dir, Time.unscaledTime);
-            EventBus.Raise(new CommandInputEvent(cmd));
+            float threshold = _settings.DodgeThresholdMm * PixelsPerMm;
+            return (screenPos - _startPos).sqrMagnitude >= threshold * threshold;
+        }
+
+        private bool IsFlick(Vector2 screenPos, double time)
+        {
+            double duration = time - _startTime;
+            if (duration > _settings.ParryFlickMaxDuration) return false;
+            float distanceMm = (screenPos - _startPos).magnitude / PixelsPerMm;
+            return distanceMm >= _settings.ParryFlickMinSpeedMmPerSec * Math.Max(duration, 1e-3);
+        }
+
+        private Vector2 WorldDirection(Vector2 screenPos)
+        {
+            var world = ScreenToWorld((screenPos - _startPos).normalized);
+            return world.sqrMagnitude > 1e-6f ? world.normalized : Vector2.zero;
+        }
+
+        private void Emit(CommandType type, Vector2 worldDir, double inputTime, double recognizedTime)
+        {
+            _output(new InputCommand(type, worldDir, (float)recognizedTime, inputTime, recognizedTime));
         }
     }
 }

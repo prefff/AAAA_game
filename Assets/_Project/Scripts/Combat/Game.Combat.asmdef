@@ -2,7 +2,8 @@
     "name": "Game.Combat",
     "rootNamespace": "Game.Combat",
     "references": [
-        "Game.Core"
+        "Game.Core",
+        "Game.Simulation"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
