@@ -42,21 +42,21 @@
                 Fix.Clamp(pos.X, center.X - half.X, center.X + half.X),
                 Fix.Clamp(pos.Y, center.Y - half.Y, center.Y + half.Y));
             var d = pos - closest;
-
-            if (d.IsZero)
+            if (!d.IsZero)
             {
-                // Центр внутри прямоугольника — выталкиваем по оси с меньшим проникновением.
-                var local = pos - center;
-                var penX = half.X + radius - Fix.Abs(local.X);
-                var penY = half.Y + radius - Fix.Abs(local.Y);
-                if (penX <= penY)
-                    return new FixVec2(center.X + (local.X.Raw >= 0 ? half.X + radius : -(half.X + radius)), pos.Y);
-                return new FixVec2(pos.X, center.Y + (local.Y.Raw >= 0 ? half.Y + radius : -(half.Y + radius)));
+                if (d.SqrMagnitude >= radius * radius) return pos;
+                var dist = d.Magnitude;
+                // Ближе ~4 мм к грани длина округляется в 0 — выталкиваем как центр внутри (иначе деление на ноль).
+                if (dist.Raw > 0) return closest + d / dist * radius;
             }
 
-            if (d.SqrMagnitude >= radius * radius) return pos;
-            var dist = d.Magnitude;
-            return closest + d / dist * radius;
+            // Центр внутри прямоугольника — выталкиваем по оси с меньшим проникновением.
+            var local = pos - center;
+            var penX = half.X + radius - Fix.Abs(local.X);
+            var penY = half.Y + radius - Fix.Abs(local.Y);
+            if (penX <= penY)
+                return new FixVec2(center.X + (local.X.Raw >= 0 ? half.X + radius : -(half.X + radius)), pos.Y);
+            return new FixVec2(pos.X, center.Y + (local.Y.Raw >= 0 ? half.Y + radius : -(half.Y + radius)));
         }
 
         /// <summary> Развести два круга поровну. Совпавшие центры расходятся по оси X (детерминированно). </summary>

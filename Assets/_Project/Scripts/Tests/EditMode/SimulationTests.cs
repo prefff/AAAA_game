@@ -158,6 +158,17 @@ namespace Game.Tests
         }
 
         [Test]
+        public void BoxPushOut_AtTheFace_DoesNotDivideByZero()
+        {
+            // Точка в 1/65536 м от грани: длина вектора до грани округляется в 0.
+            var face = FixVec2.FromFloat(1f, 0f);
+            var pos = new FixVec2(face.X + Fix.FromRaw(1), face.Y);
+            var pushed = Collision.PushOutOfBox(pos, Fix.Half, FixVec2.Zero, FixVec2.FromFloat(1f, 1f));
+            Assert.AreEqual(1.5f, pushed.X.ToFloat(), 1e-3f);
+            Assert.AreEqual(0f, pushed.Y.ToFloat(), 1e-3f);
+        }
+
+        [Test]
         public void Fighters_DoNotWalkThroughEachOther()
         {
             var h = new SimHarness(SimHarness.Duel(2f));
