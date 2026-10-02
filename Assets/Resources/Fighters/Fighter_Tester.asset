@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Game.Combat::Game.Combat.FighterDefinition
   Id: tester
   DisplayName: "\u0422\u0435\u0441\u0442\u0435\u0440"
-  ViewPrefab: {fileID: 0}
+  ViewPrefab: {fileID: 5495772033335771759, guid: bdc331c626f9bd44f9a0cc7ed9f06b01, type: 3}
   MaxHealth: 100
   MaxStamina: 100
   StaminaRegenPerSecond: 25
@@ -25,6 +25,7 @@ MonoBehaviour:
   HurtRadius: 0.5
   LightAttack: {fileID: 11400000, guid: acd52b1c8cd66394bab1e6ad282e7f57, type: 2}
   HeavyAttack: {fileID: 11400000, guid: 1a5be8d58013cc64ba3d233736bf6e93, type: 2}
+  AttackSpeed: 1
   Skill1: {fileID: 11400000, guid: fecfe0a449623ed4dbfc275642c992f6, type: 2}
   Skill2: {fileID: 11400000, guid: 313557450abc9b34ea5ddf80cd4bec67, type: 2}
   Ultimate: {fileID: 11400000, guid: 74f8933fdd52dd247b9e215659662ae7, type: 2}

@@ -92,7 +92,12 @@ namespace Game.Tests
 
             Assert.AreEqual(0, Object.FindObjectsByType<Rigidbody>(FindObjectsSortMode.None).Length, "В геймплее не должно быть Rigidbody");
             foreach (var v in views)
+            {
                 Assert.AreEqual(0, v.GetComponentsInChildren<Collider>().Length, "У вида бойца не должно быть коллайдеров");
+                Assert.IsNotNull(v.Rig, "Боец должен быть моделью с процедурной анимацией (Fighter_Hero), а не капсулой");
+                Assert.IsNull(v.GetComponentInChildren<Animator>(), "Анимация процедурная — Animator не нужен");
+            }
+            Assert.IsNotNull(Object.FindAnyObjectByType<CombatFx>(), "Нет эффектов боя");
 
             var cam = Camera.main.GetComponent<MobaCamera>();
             Assert.IsNotNull(cam);
@@ -125,17 +130,37 @@ namespace Game.Tests
         public IEnumerator Attack_IsVisible_InTheFrameOfTheCommand()
         {
             yield return WaitForFight();
-            var rend = LocalView.Body;
-            var block = new MaterialPropertyBlock();
-            int id = rend.sharedMaterial.HasProperty("_BaseColor") ? Shader.PropertyToID("_BaseColor") : Shader.PropertyToID("_Color");
+            var view = LocalView;
             // Пауза без команд, чтобы досрочный тик был разрешён.
             yield return new WaitForSeconds(0.1f);
+
+            if (view.Rig != null)
+            {
+                // Модель: startup удара — замах рукой; проверяем, что кости рук сдвинулись в кадре команды.
+                var bones = view.Rig.Model.GetComponentsInChildren<Transform>();
+                var before = bones.Select(b => view.transform.InverseTransformPoint(b.position)).ToArray();
+
+                _input.Fire(CommandType.LightAttack);
+                yield return null; // инжектор выдал команду в Update этого кадра
+                yield return new WaitForEndOfFrame(); // конец кадра, в котором команда пришла — после LateUpdate вида
+
+                Assert.AreEqual(Time.frameCount, _input.FiredFrame);
+                Assert.AreEqual(ActionState.Attack, _runner.State.Fighters[_runner.LocalPlayer].State);
+                float moved = bones.Select((b, i) => Vector3.Distance(before[i], view.transform.InverseTransformPoint(b.position))).Max();
+                Assert.Greater(moved, 0.03f, "Startup удара не отрисован в кадре команды (поза не изменилась)");
+                yield break;
+            }
+
+            // Капсула: startup удара — цвет.
+            var rend = view.Body;
+            var block = new MaterialPropertyBlock();
+            int id = rend.sharedMaterial.HasProperty("_BaseColor") ? Shader.PropertyToID("_BaseColor") : Shader.PropertyToID("_Color");
             rend.GetPropertyBlock(block);
             var idleColor = block.GetColor(id);
 
             _input.Fire(CommandType.LightAttack);
-            yield return null; // инжектор выдал команду в Update этого кадра
-            yield return new WaitForEndOfFrame(); // конец кадра, в котором команда пришла — после LateUpdate вида
+            yield return null;
+            yield return new WaitForEndOfFrame();
 
             Assert.AreEqual(Time.frameCount, _input.FiredFrame);
             Assert.AreEqual(ActionState.Attack, _runner.State.Fighters[_runner.LocalPlayer].State);

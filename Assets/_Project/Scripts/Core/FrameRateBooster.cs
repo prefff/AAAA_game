@@ -24,6 +24,9 @@ namespace Game.Core
                 QualitySettings.vSyncCount = 0;
             }
 
+            // Экран — в самый быстрый режим (на Android сам он остаётся на том, что решит система).
+            DisplayRefreshRate.RequestMax();
+
             int fps;
             if (targetFps > 0)
             {
@@ -40,15 +43,9 @@ namespace Game.Core
         }
 
         /// <summary>
-        /// Максимальная частота экрана. Текущий режим может быть ниже максимума: Android держит 60 Гц, пока
-        /// приложение не попросит больше, — а просим мы через targetFrameRate, поэтому берём лучший из режимов.
+        /// Максимальная частота экрана при текущем разрешении. Текущий режим может быть ниже: Android держит то, что
+        /// решит система, пока приложение не попросит больше (<see cref="DisplayRefreshRate.RequestMax"/>).
         /// </summary>
-        public static int MaxRefreshRate()
-        {
-            double best = Screen.currentResolution.refreshRateRatio.value;
-            foreach (var r in Screen.resolutions)
-                if (r.refreshRateRatio.value > best) best = r.refreshRateRatio.value;
-            return (int)System.Math.Round(best);
-        }
+        public static int MaxRefreshRate() => (int)System.Math.Round(DisplayRefreshRate.Max);
     }
 }

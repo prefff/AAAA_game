@@ -80,7 +80,7 @@ namespace Game.UI
         {
             var log = Latency.Log;
             _sb.Clear();
-            double refresh = Screen.currentResolution.refreshRateRatio.value;
+            float refresh = DisplayRefreshRate.Current; // реальная частота дисплея (Unity на Android врёт)
             _sb.Append($"FPS {1f / Mathf.Max(0.0001f, _smoothedDt):F0} ({FrameMs:F1} мс)  экран {refresh:F0} Гц  " +
                        $"target {Application.targetFrameRate}  vSync {QualitySettings.vSyncCount}\n");
 

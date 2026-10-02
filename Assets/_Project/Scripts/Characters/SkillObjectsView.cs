@@ -8,6 +8,8 @@ namespace Game.Characters
     /// Вид снарядов и областей скиллов: только читает GameState.Objects. Слот пула = индекс объекта в состоянии,
     /// поэтому вид не может разойтись с симуляцией (и переживает откат). Область — кольцо радиуса взрыва и внутреннее
     /// кольцо-таймер, которое растёт до взрыва. Вспышки взрыва и гашения снаряда — по событиям, чисто визуальные.
+    /// С библиотекой арта (<see cref="ArtLibrary"/>): снаряд — светящееся ядро-билборд со следом, область — ещё и
+    /// заливка, которая густеет к взрыву. Без неё — сферы и линии, как раньше.
     /// </summary>
     [DefaultExecutionOrder(110)]
     public sealed class SkillObjectsView : MonoBehaviour
@@ -21,6 +23,11 @@ namespace Game.Characters
         private Renderer[] _projectileRenderers;
         private LineRenderer[] _zoneOuter;
         private LineRenderer[] _zoneTimer;
+        private Renderer[] _projectileCores;
+        private TrailRenderer[] _projectileTrails;
+        private Renderer[] _zoneFills;
+        private bool _fancy;
+        private Camera _camera;
 
         private struct Flash
         {
@@ -53,18 +60,71 @@ namespace Game.Characters
             _projectileRenderers = new Renderer[n];
             _zoneOuter = new LineRenderer[n];
             _zoneTimer = new LineRenderer[n];
+            _projectileCores = new Renderer[n];
+            _projectileTrails = new TrailRenderer[n];
+            _zoneFills = new Renderer[n];
+            var lib = ArtLibrary.Instance;
+            _fancy = lib != null && lib.Glow != null && lib.Star != null && lib.Shadow != null;
             for (int k = 0; k < n; k++)
             {
-                var sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                sphere.name = $"Projectile_{k}";
-                sphere.transform.SetParent(transform, false);
-                Destroy(sphere.GetComponent<Collider>()); // физики в геймплее нет
-                sphere.SetActive(false);
-                _projectiles[k] = sphere.transform;
-                _projectileRenderers[k] = sphere.GetComponent<Renderer>();
+                if (_fancy) CreateFancyProjectile(k, lib);
+                else
+                {
+                    var sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                    sphere.name = $"Projectile_{k}";
+                    sphere.transform.SetParent(transform, false);
+                    Destroy(sphere.GetComponent<Collider>()); // физики в геймплее нет
+                    sphere.SetActive(false);
+                    _projectiles[k] = sphere.transform;
+                    _projectileRenderers[k] = sphere.GetComponent<Renderer>();
+                }
                 _zoneOuter[k] = WorldLines.Create($"Zone_{k}", transform, 0.1f, loop: true);
                 _zoneTimer[k] = WorldLines.Create($"ZoneTimer_{k}", transform, 0.06f, loop: true);
+                if (_fancy)
+                {
+                    var fill = Quad($"ZoneFill_{k}", transform, lib.Shadow);
+                    fill.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
+                    fill.gameObject.SetActive(false);
+                    _zoneFills[k] = fill;
+                }
             }
+        }
+
+        private void CreateFancyProjectile(int k, ArtLibrary lib)
+        {
+            var root = new GameObject($"Projectile_{k}").transform;
+            root.SetParent(transform, false);
+            var glow = Quad("Glow", root, lib.Glow);
+            glow.transform.localScale = Vector3.one * 2.6f;
+            var core = Quad("Core", root, lib.Star);
+            core.transform.localScale = Vector3.one * 1.5f;
+            core.transform.localPosition = new Vector3(0f, 0f, -0.01f);
+            var trail = root.gameObject.AddComponent<TrailRenderer>();
+            trail.sharedMaterial = lib.Glow;
+            trail.time = 0.18f;
+            trail.minVertexDistance = 0.08f;
+            trail.widthCurve = new AnimationCurve(new Keyframe(0f, 1f), new Keyframe(1f, 0f));
+            trail.numCapVertices = 0;
+            trail.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            trail.receiveShadows = false;
+            root.gameObject.SetActive(false);
+            _projectiles[k] = root;
+            _projectileRenderers[k] = glow;
+            _projectileCores[k] = core;
+            _projectileTrails[k] = trail;
+        }
+
+        private static Renderer Quad(string name, Transform parent, Material material)
+        {
+            var go = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            go.name = name;
+            go.transform.SetParent(parent, false);
+            Destroy(go.GetComponent<Collider>());
+            var r = go.GetComponent<Renderer>();
+            r.sharedMaterial = material;
+            r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            r.receiveShadows = false;
+            return r;
         }
 
         private void OnEnable() => Subscribe();
@@ -112,7 +172,7 @@ namespace Game.Characters
                 var color = sk != null ? ColorOf(o.Owner) : Color.white;
 
                 bool projectile = sk != null && o.Kind == SkillObjectKind.Projectile;
-                SetActive(_projectiles[k].gameObject, projectile);
+                bool appeared = projectile && !_projectiles[k].gameObject.activeSelf;
                 if (projectile)
                 {
                     projectiles++;
@@ -120,7 +180,19 @@ namespace Game.Characters
                     _projectiles[k].position = pos + Vector3.up * ProjectileHeight;
                     _projectiles[k].localScale = new Vector3(d, d, d);
                     Tint(_projectileRenderers[k], Color.Lerp(color, Color.white, 0.4f));
+                    if (_fancy)
+                    {
+                        if (_camera == null) _camera = Camera.main;
+                        if (_camera != null) _projectiles[k].rotation = _camera.transform.rotation;
+                        _projectileCores[k].transform.localRotation = Quaternion.Euler(0f, 0f, Time.time * 720f);
+                        Tint(_projectileCores[k], Color.Lerp(color, Color.white, 0.75f));
+                        _projectileTrails[k].widthMultiplier = d * 0.9f;
+                        _projectileTrails[k].startColor = Color.Lerp(color, Color.white, 0.3f);
+                        _projectileTrails[k].endColor = new Color(color.r, color.g, color.b, 0f);
+                    }
                 }
+                SetActive(_projectiles[k].gameObject, projectile);
+                if (appeared && _fancy) _projectileTrails[k].Clear(); // след из слота пула не тянется с прошлого снаряда
 
                 if (sk != null && o.Kind == SkillObjectKind.Zone)
                 {
@@ -129,11 +201,20 @@ namespace Game.Characters
                     float progress = 1f - o.TicksLeft / (float)Mathf.Max(1, sk.ZoneDelayTicks);
                     WorldLines.Ring(_zoneOuter[k], pos, r, color);
                     WorldLines.Ring(_zoneTimer[k], pos, Mathf.Max(0.05f, r * progress), new Color(color.r, color.g, color.b, 0.6f));
+                    if (_fancy)
+                    {
+                        var fill = _zoneFills[k];
+                        fill.transform.position = pos + Vector3.up * 0.025f;
+                        fill.transform.localScale = new Vector3(r * 2.3f, r * 2.3f, 1f);
+                        Tint(fill, new Color(color.r, color.g, color.b, 0.12f + 0.4f * progress * progress));
+                        SetActive(fill.gameObject, true);
+                    }
                 }
                 else
                 {
                     WorldLines.Hide(_zoneOuter[k]);
                     WorldLines.Hide(_zoneTimer[k]);
+                    if (_fancy) SetActive(_zoneFills[k].gameObject, false);
                 }
             }
             VisibleProjectiles = projectiles;

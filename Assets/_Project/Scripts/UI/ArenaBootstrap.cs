@@ -74,6 +74,12 @@ namespace Game.UI
             if (_latencyOverlay) CreateLatencyOverlay();
         }
 
+        // Система может сбросить режим экрана, пока игра в фоне, — после возврата просим частоту снова.
+        private void OnApplicationFocus(bool focus)
+        {
+            if (focus) FrameRateBooster.Apply(_targetFps, _disableVSync);
+        }
+
         // ---------- UI ----------
 
         private static void EnsureEventSystem()

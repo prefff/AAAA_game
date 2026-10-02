@@ -1,0 +1,22 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: faf05cc4a6d3e9a499e735919c2eb1f0, type: 3}
+  m_Name: ArtLibrary
+  m_EditorClassIdentifier: Game.Characters::Game.Characters.ArtLibrary
+  Floor: {fileID: 2100000, guid: bbace7b31aa1db5438f2feeecaf079ea, type: 2}
+  Wall: {fileID: 2100000, guid: bc3011c6544b9274d833b7d92dcdec5e, type: 2}
+  Obstacle: {fileID: 2100000, guid: 0d444fe38cd698e48ac850c5da30a7d0, type: 2}
+  Glow: {fileID: 2100000, guid: 34970c1cceb721b4ba64eaeb749d3792, type: 2}
+  Ring: {fileID: 2100000, guid: fcac10f2f84445043821830616287e1b, type: 2}
+  Star: {fileID: 2100000, guid: 3e45214456c05e241aa5b74117b1ccf6, type: 2}
+  Puff: {fileID: 2100000, guid: 83a4deefaf252e04a89c557664736388, type: 2}
+  Shadow: {fileID: 2100000, guid: 50e2db082e9ce9d4ba91e916a5c7c628, type: 2}

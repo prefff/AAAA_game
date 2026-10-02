@@ -10,7 +10,9 @@ namespace Game.UI
     ///   - MatchRunner (симуляция боя) с параметрами бойцов;
     ///   - пол, стены по краям и препятствия — по ArenaSpec (геометрия в мире совпадает с коллизиями симуляции);
     ///   - виды двух бойцов (из префабов или процедурно: капсула + диск хитбокса), снарядов/областей и прицела скилла;
-    ///   - камеру MobaCamera на своём бойце и свет.
+    ///   - эффекты боя (<see cref="CombatFx"/>), камеру MobaCamera на своём бойце и свет.
+    /// Материалы арены и эффектов — из <see cref="ArtLibrary"/> (нет ассета — серые примитивы). Освещение мобильное:
+    /// один направленный свет без realtime-теней (под бойцами — тень-блоб из префаба), окружение — три цвета.
     /// Физики Unity здесь нет: коллайдеры примитивов удаляются, всё движение и столкновения — в симуляции.
     /// Уже существующие объекты (свет, пол, камера) переиспользуются, поэтому повторный вызов безопасен.
     /// </summary>
@@ -35,6 +37,7 @@ namespace Game.UI
             public MobaCamera Camera;
             public SkillObjectsView SkillObjects;
             public SkillAimIndicator AimIndicator;
+            public CombatFx Fx;
 
             public FighterView Local => Views[Runner.LocalPlayer];
             public FighterView Opponent => Views[Runner.Opponent];
@@ -68,6 +71,8 @@ namespace Game.UI
             result.SkillObjects.Bind(runner, colors);
             result.AimIndicator = new GameObject("_SkillAim").AddComponent<SkillAimIndicator>();
             result.AimIndicator.Bind(runner);
+            result.Fx = new GameObject("_CombatFx").AddComponent<CombatFx>();
+            result.Fx.Bind(runner, colors);
 
             result.Camera = EnsureMainCamera(result.Local.transform, runner.LocalPlayer);
             return result;
@@ -113,6 +118,7 @@ namespace Game.UI
                 root.SetActive(true);
             }
             view.name = name;
+            view.SetTeam(color);
             view.Bind(runner, index);
             return view;
         }
@@ -121,27 +127,60 @@ namespace Game.UI
 
         private static void EnsureLight()
         {
-            var existing = Object.FindFirstObjectByType<Light>();
-            if (existing != null && existing.type == LightType.Directional) return;
+            var light = Object.FindFirstObjectByType<Light>();
+            if (light == null || light.type != LightType.Directional)
+            {
+                var go = new GameObject("Directional Light");
+                go.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
+                light = go.AddComponent<Light>();
+                light.type = LightType.Directional;
+                light.color = new Color(1f, 0.96f, 0.9f);
+                light.intensity = 1.1f;
+                light.shadows = LightShadows.Soft;
+            }
+            if (ArtLibrary.Instance == null) return;
 
-            var go = new GameObject("Directional Light");
-            go.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
-            var light = go.AddComponent<Light>();
-            light.type = LightType.Directional;
-            light.color = new Color(1f, 0.96f, 0.9f);
-            light.intensity = 1.1f;
-            light.shadows = LightShadows.Soft;
+            // Тёплый «закатный» ключевой свет и холодное окружение: бойцы читаются на тёплом полу.
+            // Realtime-тени выключены — на мобилках это самый дорогой проход; под бойцом тень-блоб.
+            light.transform.rotation = Quaternion.Euler(55f, -35f, 0f);
+            light.color = new Color(1f, 0.93f, 0.82f);
+            light.intensity = 1.15f;
+            light.shadows = LightShadows.None;
+            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
+            RenderSettings.ambientSkyColor = new Color(0.44f, 0.48f, 0.6f);
+            RenderSettings.ambientEquatorColor = new Color(0.36f, 0.34f, 0.36f);
+            RenderSettings.ambientGroundColor = new Color(0.2f, 0.18f, 0.17f);
+            RenderSettings.fog = false;
         }
 
         private static void EnsureFloor(ArenaSpec arena)
         {
-            if (GameObject.Find("Floor") != null) return;
+            var lib = ArtLibrary.Instance;
             var size = ToWorld(arena.Max) - ToWorld(arena.Min);
             var center = (ToWorld(arena.Max) + ToWorld(arena.Min)) * 0.5f;
-            var floor = CreatePrimitive(PrimitiveType.Plane, "Floor", null, FloorColor);
+            var floor = GameObject.Find("Floor");
+            if (floor == null)
+            {
+                floor = CreatePrimitive(PrimitiveType.Plane, "Floor", null, FloorColor, lib != null ? lib.Floor : null);
+                // Plane — 10×10 м; с запасом за стенами, чтобы край не был виден камерой.
+                floor.transform.localScale = new Vector3(size.x / 10f + 1f, 1f, size.z / 10f + 1f);
+            }
+            // Земля симуляции — y = 0: на ней стоят бойцы, стены и тени (пол из сцены стоял на −0,5).
             floor.transform.position = center;
-            // Plane — 10×10 м; с запасом за стенами, чтобы край не был виден камерой.
-            floor.transform.localScale = new Vector3(size.x / 10f + 1f, 1f, size.z / 10f + 1f);
+            var rend = floor.GetComponent<Renderer>();
+            if (lib != null && lib.Floor != null && rend != null)
+            {
+                // Пол из сцены тоже получает материал арены. Разметка ложится ровно в её прямоугольник.
+                rend.sharedMaterial = lib.Floor;
+                rend.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                rend.receiveShadows = false;
+                var block = new MaterialPropertyBlock();
+                rend.GetPropertyBlock(block);
+                var min = ToWorld(arena.Min);
+                var max = ToWorld(arena.Max);
+                block.SetVector("_ArenaRect", new Vector4(min.x, min.z, max.x, max.z));
+                rend.SetPropertyBlock(block);
+            }
         }
 
         /// <summary> Стены по краям и препятствия — один в один с коллизиями симуляции. </summary>
@@ -156,11 +195,14 @@ namespace Game.UI
             var size = max - min;
             var center = (min + max) * 0.5f;
             float t = WallThickness;
+            var lib = ArtLibrary.Instance;
+            var wallMat = lib != null ? lib.Wall : null;
+            var obstacleMat = lib != null ? lib.Obstacle : null;
 
-            CreateBlock(root.transform, "Wall_N", new Vector3(center.x, 0f, max.z + t * 0.5f), new Vector3(size.x + 2f * t, WallHeight, t), WallColor);
-            CreateBlock(root.transform, "Wall_S", new Vector3(center.x, 0f, min.z - t * 0.5f), new Vector3(size.x + 2f * t, WallHeight, t), WallColor);
-            CreateBlock(root.transform, "Wall_E", new Vector3(max.x + t * 0.5f, 0f, center.z), new Vector3(t, WallHeight, size.z), WallColor);
-            CreateBlock(root.transform, "Wall_W", new Vector3(min.x - t * 0.5f, 0f, center.z), new Vector3(t, WallHeight, size.z), WallColor);
+            CreateBlock(root.transform, "Wall_N", new Vector3(center.x, 0f, max.z + t * 0.5f), new Vector3(size.x + 2f * t, WallHeight, t), WallColor, wallMat);
+            CreateBlock(root.transform, "Wall_S", new Vector3(center.x, 0f, min.z - t * 0.5f), new Vector3(size.x + 2f * t, WallHeight, t), WallColor, wallMat);
+            CreateBlock(root.transform, "Wall_E", new Vector3(max.x + t * 0.5f, 0f, center.z), new Vector3(t, WallHeight, size.z), WallColor, wallMat);
+            CreateBlock(root.transform, "Wall_W", new Vector3(min.x - t * 0.5f, 0f, center.z), new Vector3(t, WallHeight, size.z), WallColor, wallMat);
 
             for (int i = 0; i < arena.Obstacles.Length; i++)
             {
@@ -169,22 +211,22 @@ namespace Game.UI
                 if (o.Shape == ObstacleShape.Circle)
                 {
                     float d = o.Radius.ToFloat() * 2f;
-                    var pillar = CreatePrimitive(PrimitiveType.Cylinder, $"Pillar_{i}", root.transform, ObstacleColor);
+                    var pillar = CreatePrimitive(PrimitiveType.Cylinder, $"Pillar_{i}", root.transform, ObstacleColor, obstacleMat);
                     pillar.transform.position = pos + Vector3.up * (ObstacleHeight * 0.5f);
                     pillar.transform.localScale = new Vector3(d, ObstacleHeight * 0.5f, d); // цилиндр — 2 м в высоту
                 }
                 else
                 {
                     var half = ToWorld(o.HalfExtents);
-                    CreateBlock(root.transform, $"Block_{i}", pos, new Vector3(half.x * 2f, ObstacleHeight, half.z * 2f), ObstacleColor);
+                    CreateBlock(root.transform, $"Block_{i}", pos, new Vector3(half.x * 2f, ObstacleHeight, half.z * 2f), ObstacleColor, obstacleMat);
                 }
             }
             return root;
         }
 
-        private static void CreateBlock(Transform parent, string name, Vector3 groundCenter, Vector3 size, Color color)
+        private static void CreateBlock(Transform parent, string name, Vector3 groundCenter, Vector3 size, Color color, Material material = null)
         {
-            var go = CreatePrimitive(PrimitiveType.Cube, name, parent, color);
+            var go = CreatePrimitive(PrimitiveType.Cube, name, parent, color, material);
             go.transform.position = groundCenter + Vector3.up * (size.y * 0.5f);
             go.transform.localScale = size;
         }
@@ -201,7 +243,7 @@ namespace Game.UI
             }
 
             cam.clearFlags = CameraClearFlags.SolidColor;
-            cam.backgroundColor = new Color(0.1f, 0.12f, 0.16f, 1f);
+            cam.backgroundColor = ArtLibrary.Instance != null ? new Color(0.06f, 0.065f, 0.08f, 1f) : new Color(0.1f, 0.12f, 0.16f, 1f);
             cam.fieldOfView = 45f;
             cam.nearClipPlane = 0.1f;
             cam.farClipPlane = 200f;
@@ -216,7 +258,8 @@ namespace Game.UI
 
         public static Vector3 ToWorld(FixVec2 v) => new(v.X.ToFloat(), 0f, v.Y.ToFloat());
 
-        private static GameObject CreatePrimitive(PrimitiveType type, string name, Transform parent, Color color)
+        /// <summary> Примитив без коллайдера: с материалом из библиотеки или стандартный, покрашенный в color. </summary>
+        private static GameObject CreatePrimitive(PrimitiveType type, string name, Transform parent, Color color, Material material = null)
         {
             var go = GameObject.CreatePrimitive(type);
             go.name = name;
@@ -228,7 +271,14 @@ namespace Game.UI
                 if (Application.isPlaying) Object.Destroy(col);
                 else Object.DestroyImmediate(col);
             }
-            Tint(go.GetComponent<Renderer>(), color);
+            var rend = go.GetComponent<Renderer>();
+            if (material != null)
+            {
+                rend.sharedMaterial = material;
+                rend.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                rend.receiveShadows = false;
+            }
+            else Tint(rend, color);
             return go;
         }
 
