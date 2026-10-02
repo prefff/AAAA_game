@@ -101,6 +101,17 @@
             return false;
         }
 
+        /// <summary>
+        /// Задевает ли отрезок a→b препятствие, раздутое на inflate (для пути тела радиуса inflate). Прямоугольник
+        /// раздувается без скругления углов — чуть осторожнее точной формы.
+        /// </summary>
+        public static bool SegmentHitsObstacle(FixVec2 a, FixVec2 b, in Obstacle o, Fix inflate)
+        {
+            if (o.Shape == ObstacleShape.Circle) return SegmentHitsCircle(a, b, o.Center, o.Radius + inflate);
+            var half = o.HalfExtents + new FixVec2(inflate, inflate);
+            return SegmentHitsBox(a, b, o.Center - half, o.Center + half);
+        }
+
         /// <summary> Задевает ли отрезок a→b круг (c, r): снаряд за тик не проскочит цель насквозь. </summary>
         public static bool SegmentHitsCircle(FixVec2 a, FixVec2 b, FixVec2 c, Fix r)
         {

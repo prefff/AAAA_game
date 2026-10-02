@@ -13,13 +13,13 @@ MonoBehaviour:
   m_Name: Attack_Light
   m_EditorClassIdentifier: 
   DisplayName: Light Attack
-  StartupFrames: 6
+  StartupFrames: 7
   ActiveFrames: 3
-  RecoveryFrames: 12
+  RecoveryFrames: 14
   Damage: 8
   Knockback: 3
-  HitstunFrames: 18
-  BlockstunFrames: 10
+  HitstunFrames: 17
+  BlockstunFrames: 9
   HitstopFrames: 3
   HitboxOffset: 1
   HitboxRadius: 0.6

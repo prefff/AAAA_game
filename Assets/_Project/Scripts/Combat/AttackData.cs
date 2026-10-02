@@ -59,12 +59,17 @@ namespace Game.Combat
         public float ActiveSeconds => ActiveFrames / 60f;
         public float RecoverySeconds => RecoveryFrames / 60f;
 
-        public AttackSpec ToSpec(AttackKind kind) => new()
+        /// <summary>
+        /// Спека удара. attackSpeed — скорость атаки персонажа: весь цикл удара (startup, active, recovery) делится на
+        /// неё, а hitstun и блок-стан цели — нет. Поэтому скорость атаки двигает преимущество по кадрам: медленный
+        /// боец после удара освобождается позже.
+        /// </summary>
+        public AttackSpec ToSpec(AttackKind kind, float attackSpeed = 1f) => new()
         {
             Kind = kind,
-            StartupTicks = SimTime.Frames(StartupFrames),
-            ActiveTicks = SimTime.Frames(ActiveFrames),
-            RecoveryTicks = SimTime.Frames(RecoveryFrames),
+            StartupTicks = ScaledTicks(StartupFrames, attackSpeed, 0),
+            ActiveTicks = ScaledTicks(ActiveFrames, attackSpeed, 1),
+            RecoveryTicks = ScaledTicks(RecoveryFrames, attackSpeed, 0),
             Damage = Fix.FromFloat(Damage),
             KnockbackSpeed = SimTime.PerSecond(Knockback),
             HitstunTicks = SimTime.Frames(HitstunFrames),
@@ -77,5 +82,12 @@ namespace Game.Combat
             HitRadius = Fix.FromFloat(HitboxRadius),
             MoveSpeedFactor = Fix.FromFloat(MoveSpeedFactor),
         };
+
+        private static int ScaledTicks(int frames, float attackSpeed, int min)
+        {
+            if (attackSpeed <= 0f) attackSpeed = 1f;
+            int scaled = (int)System.Math.Round(frames / (double)attackSpeed, System.MidpointRounding.AwayFromZero);
+            return SimTime.Frames(System.Math.Max(min, scaled));
+        }
     }
 }

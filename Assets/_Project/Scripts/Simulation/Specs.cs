@@ -9,21 +9,24 @@ namespace Game.Simulation
     public sealed class AttackSpec
     {
         public AttackKind Kind = AttackKind.Light;
-        public int StartupTicks = SimTime.Frames(6);
+        public int StartupTicks = SimTime.Frames(7);
         public int ActiveTicks = SimTime.Frames(3);
-        public int RecoveryTicks = SimTime.Frames(12);
+        public int RecoveryTicks = SimTime.Frames(14);
         public Fix Damage = Fix.FromInt(8);
         /// <summary> Скорость отбрасывания цели, м/тик. </summary>
         public Fix KnockbackSpeed = SimTime.PerSecond(3f);
-        public int HitstunTicks = SimTime.Frames(18);
-        public int BlockstunTicks = SimTime.Frames(10);
+        public int HitstunTicks = SimTime.Frames(17);
+        public int BlockstunTicks = SimTime.Frames(9);
         /// <summary> Стоп-кадр обоим бойцам при контакте (ощущение удара). </summary>
         public int HitstopTicks = SimTime.Frames(3);
         /// <summary> Списывается при выходе хитбокса: отмена в startup бесплатна. </summary>
         public Fix StaminaCost = Fix.Zero;
         /// <summary> Сколько стамины удар выбивает из блока; стамина кончилась — блок пробит. </summary>
         public Fix GuardDamage = Fix.FromInt(6);
-        /// <summary> После попадания (или блока) active/recovery отменяются следующим ударом — комбо. </summary>
+        /// <summary>
+        /// После попадания (или блока) active/recovery отменяются следующим ударом — комбо. Лёгкий в лёгкий — только
+        /// если цель оглушена и серия короче MatchRules.LightChainMax; в тяжёлый и в скилл — после любого контакта.
+        /// </summary>
         public bool CancelOnHit = true;
         public Fix HitOffset = Fix.One;
         public Fix HitRadius = Fix.FromFloat(0.6f);
@@ -157,16 +160,20 @@ namespace Game.Simulation
         /// <summary> Уязвимая зона для хитбоксов. </summary>
         public Fix HurtRadius = Fix.Half;
 
+        /// <summary> Первые тики блока — парирование («блок вовремя»). </summary>
         public int ParryWindowTicks = SimTime.Frames(11);
-        /// <summary> Парирование мимо: столько тиков боец уязвим. Без этого парирование бесплатно спамится. </summary>
+        /// <summary> Парирование мимо и блок уже отпущен: столько тиков боец уязвим. </summary>
         public int ParryWhiffRecoveryTicks = SimTime.Frames(8);
+        /// <summary>
+        /// Новое парирование — не раньше, чем через столько тиков после начала прошлого (удачное — сразу): иначе
+        /// дёрганье блока превращает каждое нажатие в парирование. Блок в это время ставится обычный.
+        /// </summary>
+        public int ParryRearmTicks = SimTime.Frames(30);
 
         public Fix DodgeSpeed = SimTime.PerSecond(8f);
         public int DodgeTicks = SimTime.Frames(15);
         public int DodgeIFrameTicks = SimTime.Frames(8);
         public Fix DodgeStaminaCost = Fix.FromInt(20);
-        /// <summary> Flick распознаётся при отпускании: уклонение, начатое сдвигом пальца, столько тиков ещё отменяется в парирование с возвратом стамины. </summary>
-        public int DodgeToParryCancelTicks = SimTime.Frames(9);
 
         public Fix BlockDamageMultiplier = Fix.FromFloat(0.3f);
         public Fix BlockKnockbackMultiplier = Fix.FromFloat(0.3f);
@@ -222,6 +229,14 @@ namespace Game.Simulation
         /// <summary> На столько тиков короче hitstun каждого следующего попадания серии. </summary>
         public int HitstunDecayPerHit = SimTime.Frames(3);
         public int MinHitstunTicks = SimTime.Frames(6);
+        /// <summary> Лёгких ударов в одной серии отмен: дальше серию продолжает только тяжёлый удар или скилл. </summary>
+        public int LightChainMax = 3;
+        /// <summary>
+        /// «Кулдаун на оглушение»: вышедшего из hitstun столько тиков не оглушают лёгкие удары (урон проходит, действие
+        /// не прерывается). Без этого лёгкий удар сразу после серии запирает снова, и спам лёгких не оставляет ответа.
+        /// Тяжёлый удар и скиллы оглушают как обычно.
+        /// </summary>
+        public int LightStunImmunityTicks = SimTime.Frames(30);
         /// <summary> Столько первых попаданий серии — в полный урон. </summary>
         public int ComboFullDamageHits = 2;
         public Fix ComboDamageScalePerHit = Fix.FromFloat(0.15f);

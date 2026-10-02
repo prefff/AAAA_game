@@ -173,6 +173,8 @@ namespace Game.Simulation
             if (f.Cooldown0 > 0) f.Cooldown0--;
             if (f.Cooldown1 > 0) f.Cooldown1--;
             if (f.Cooldown2 > 0) f.Cooldown2--;
+            if (f.ParryCooldown > 0) f.ParryCooldown--;
+            if (f.StunImmunityTicks > 0) f.StunImmunityTicks--;
         }
 
         /// <summary> Таймеры текущего состояния: выход из удара, оглушения, уклонения, парирования; выход скилла. </summary>
@@ -201,7 +203,12 @@ namespace Game.Simulation
                     if (f.StunTicks == 0 && !f.BlockHeld) Enter(ref f, ActionState.Idle);
                     break;
                 case ActionState.Parry:
-                    if (f.StateTicks >= spec.ParryWindowTicks) Enter(ref f, ActionState.ParryRecovery);
+                    // Окно прошло без удара: палец держит блок — просто блок, отпустили — короткая уязвимость.
+                    if (f.StateTicks >= spec.ParryWindowTicks)
+                    {
+                        if (f.BlockHeld && canAct) EnterBlock(ref f);
+                        else Enter(ref f, ActionState.ParryRecovery);
+                    }
                     break;
                 case ActionState.ParryRecovery:
                     if (f.StateTicks >= spec.ParryWhiffRecoveryTicks) Enter(ref f, ActionState.Idle);
@@ -210,6 +217,12 @@ namespace Game.Simulation
                     if (f.StateTicks >= spec.DodgeTicks) Enter(ref f, ActionState.Idle);
                     break;
                 case ActionState.Hitstun:
+                    if (--f.StunTicks <= 0)
+                    {
+                        Enter(ref f, ActionState.Idle);
+                        f.StunImmunityTicks = Rules.LightStunImmunityTicks;
+                    }
+                    break;
                 case ActionState.ParryStunned:
                     if (--f.StunTicks <= 0) Enter(ref f, ActionState.Idle);
                     break;
@@ -369,7 +382,8 @@ namespace Game.Simulation
                     // Комбо: попавший (или заблокированный) удар отменяется в следующий удар или в скилл.
                     if (phase != AttackPhase.Startup && f.AttackConnected)
                     {
-                        if (isAttack && atk.CancelOnHit) return TryAttack(s, i, ref f, spec, KindOf(cmd.Kind));
+                        if (isAttack && atk.CancelOnHit && CanChain(f, KindOf(cmd.Kind)))
+                            return TryAttack(s, i, ref f, spec, KindOf(cmd.Kind), chained: true);
                         if (isSkill) return TrySkill(s, i, ref f, spec, cmd);
                     }
 
@@ -381,15 +395,16 @@ namespace Game.Simulation
                             switch (cmd.Kind)
                             {
                                 case CommandKind.Dodge: return TryDodge(ref f, spec, cmd);
-                                case CommandKind.Parry: EnterParry(ref f); return true;
-                                case CommandKind.BlockStart: EnterBlock(ref f); return true;
+                                case CommandKind.Parry: return TryParry(ref f, spec, held: false);
+                                case CommandKind.BlockStart: StartGuard(ref f, spec); return true;
                                 case CommandKind.HeavyAttack:
                                     return f.Attack != AttackKind.Heavy && TryAttack(s, i, ref f, spec, AttackKind.Heavy);
                             }
                             return false;
-                        // Recovery отменяется в оборону.
+                        // Recovery отменяется в оборону: уклонение или парирование (обычный блок — только после recovery).
                         case AttackPhase.Recovery:
-                            if (cmd.Kind == CommandKind.Parry) { EnterParry(ref f); return true; }
+                            if (cmd.Kind == CommandKind.Parry) return TryParry(ref f, spec, held: false);
+                            if (cmd.Kind == CommandKind.BlockStart) return TryParry(ref f, spec, held: true);
                             if (cmd.Kind == CommandKind.Dodge) return TryDodge(ref f, spec, cmd);
                             return false;
                     }
@@ -401,10 +416,10 @@ namespace Game.Simulation
                     switch (cmd.Kind)
                     {
                         case CommandKind.Dodge: return TryDodge(ref f, spec, cmd);
-                        case CommandKind.Parry: EnterParry(ref f); return true;
+                        case CommandKind.Parry: return TryParry(ref f, spec, held: false);
                         case CommandKind.BlockStart:
-                            if (f.SkillFired) return false;
-                            EnterBlock(ref f);
+                            if (f.SkillFired) return TryParry(ref f, spec, held: true);
+                            StartGuard(ref f, spec);
                             return true;
                     }
                     return false;
@@ -415,23 +430,27 @@ namespace Game.Simulation
                     switch (cmd.Kind)
                     {
                         case CommandKind.BlockStart: return true; // уже в блоке
-                        case CommandKind.Parry: EnterParry(ref f); return true;
+                        case CommandKind.Parry: return TryParry(ref f, spec, held: false);
                         case CommandKind.Dodge: return TryDodge(ref f, spec, cmd);
                     }
                     return false;
 
-                case ActionState.Dodge:
-                    // Flick распознаётся при отпускании, а сдвиг пальца уже запустил уклонение: это этап распознавания,
-                    // а не намерение игрока — отменяем в парирование и возвращаем стамину.
-                    if (cmd.Kind == CommandKind.Parry && f.StateTicks <= spec.DodgeToParryCancelTicks)
-                    {
-                        if (f.DodgePaid) f.Stamina = Fix.Min(spec.MaxStamina, f.Stamina + spec.DodgeStaminaCost);
-                        EnterParry(ref f);
-                        return true;
-                    }
-                    return false;
+                case ActionState.Parry:
+                    // Удержание, потом свайп — уклонение из блока, даже если окно парирования ещё идёт.
+                    if (cmd.Kind == CommandKind.Dodge) return TryDodge(ref f, spec, cmd);
+                    return cmd.Kind == CommandKind.BlockStart; // уже в обороне: окно доиграет и перейдёт в блок
             }
             return false;
+        }
+
+        /// <summary>
+        /// Можно ли отменить попавший удар в удар kind. Тяжёлый — после любого контакта. Лёгкий в лёгкий — только если
+        /// цель оглушена и серия не длиннее LightChainMax: цепочка лёгких короткая, продолжение — тяжёлым или скиллом.
+        /// </summary>
+        private bool CanChain(in FighterSim f, AttackKind kind)
+        {
+            if (kind != AttackKind.Light) return true;
+            return f.AttackStunned && f.LightChain < Rules.LightChainMax;
         }
 
         private bool Route(GameState s, int i, ref FighterSim f, FighterSpec spec, SimCommand cmd)
@@ -442,11 +461,10 @@ namespace Game.Simulation
                 case CommandKind.HeavyAttack:
                     return TryAttack(s, i, ref f, spec, KindOf(cmd.Kind));
                 case CommandKind.BlockStart:
-                    EnterBlock(ref f);
+                    StartGuard(ref f, spec);
                     return true;
                 case CommandKind.Parry:
-                    EnterParry(ref f);
-                    return true;
+                    return TryParry(ref f, spec, held: false);
                 case CommandKind.Dodge:
                     return TryDodge(ref f, spec, cmd);
                 case CommandKind.Skill1:
@@ -460,14 +478,19 @@ namespace Game.Simulation
         private static AttackKind KindOf(CommandKind kind) =>
             kind == CommandKind.HeavyAttack ? AttackKind.Heavy : AttackKind.Light;
 
-        /// <summary> Удар, если он настроен и хватает стамины. Поворачивает к противнику в радиусе захвата. </summary>
-        private bool TryAttack(GameState s, int i, ref FighterSim f, FighterSpec spec, AttackKind kind)
+        /// <summary>
+        /// Удар, если он настроен и хватает стамины. Поворачивает к противнику в радиусе захвата. chained — отмена
+        /// попавшего удара: лёгкий продолжает серию лёгких, иначе начинает новую.
+        /// </summary>
+        private bool TryAttack(GameState s, int i, ref FighterSim f, FighterSpec spec, AttackKind kind, bool chained = false)
         {
             var atk = spec.Attack(kind);
             if (atk == null || f.Stamina < atk.StaminaCost) return false;
 
+            int chain = atk.Kind != AttackKind.Light ? 0 : (chained ? f.LightChain + 1 : 1);
             Enter(ref f, ActionState.Attack);
             f.Attack = atk.Kind;
+            f.LightChain = chain;
             f.BlockHeld = false;
 
             ref readonly var target = ref s.Fighters[1 - i];
@@ -625,11 +648,7 @@ namespace Game.Simulation
             Enter(ref f, ActionState.Dodge);
             f.DodgeDirection = dir;
             f.BlockHeld = false;
-            if (spec.DodgeStaminaCost.Raw > 0)
-            {
-                Spend(ref f, spec, spec.DodgeStaminaCost);
-                f.DodgePaid = true;
-            }
+            if (spec.DodgeStaminaCost.Raw > 0) Spend(ref f, spec, spec.DodgeStaminaCost);
             return true;
         }
 
@@ -639,10 +658,26 @@ namespace Game.Simulation
             f.StaminaRegenDelay = spec.StaminaRegenDelayTicks;
         }
 
-        private static void EnterParry(ref FighterSim f)
+        /// <summary>
+        /// Нажатие блока: если парирование перезарядилось — блок начинается с окна парирования («блок вовремя»),
+        /// иначе — обычный блок.
+        /// </summary>
+        private static void StartGuard(ref FighterSim f, FighterSpec spec)
         {
+            if (!TryParry(ref f, spec, held: true)) EnterBlock(ref f);
+        }
+
+        /// <summary>
+        /// Окно парирования, если оно перезарядилось. held — палец держит блок: после окна боец останется в блоке;
+        /// иначе (команда Parry — нажатие и отпускание) после окна — короткая уязвимость.
+        /// </summary>
+        private static bool TryParry(ref FighterSim f, FighterSpec spec, bool held)
+        {
+            if (f.ParryCooldown > 0) return false;
             Enter(ref f, ActionState.Parry);
-            f.BlockHeld = false;
+            f.BlockHeld = held;
+            f.ParryCooldown = spec.ParryRearmTicks;
+            return true;
         }
 
         private static void EnterBlock(ref FighterSim f)
@@ -658,7 +693,7 @@ namespace Game.Simulation
             f.Attack = AttackKind.None;
             f.AttackResolved = false;
             f.AttackConnected = false;
-            f.DodgePaid = false;
+            f.AttackStunned = false;
             f.SkillFired = false;
             if (!KeepsKnockback(state)) f.Velocity = FixVec2.Zero;
         }
@@ -803,6 +838,7 @@ namespace Game.Simulation
                     Enter(ref f, ActionState.ParryStunned);
                     f.StunTicks = Rules.ParryStunTicks;
                     Enter(ref d, ActionState.Idle);
+                    d.ParryCooldown = 0; // удачное парирование перезаряжается сразу: следующий удар серии тоже можно поймать
                     f.HitstopTicks = d.HitstopTicks = Rules.ParryHitstopTicks;
                     Emit(s, SimEventType.Parried, di, a, Fix.Zero, Rules.ParryStunTicks, position: d.Position);
                     return;
@@ -819,9 +855,37 @@ namespace Game.Simulation
 
                 case HitResult.Hit:
                     f.AttackResolved = f.AttackConnected = true;
+                    if (atk.Kind == AttackKind.Light && d.StunImmunityTicks > 0)
+                    {
+                        LandUnstunned(s, a, atk.Hit, attackerBusy);
+                        return;
+                    }
+                    f.AttackStunned = true;
                     LandHit(s, a, atk.Hit, KnockDirection(f, d), attackerBusy, melee: true, slot: -1);
                     return;
             }
+        }
+
+        /// <summary>
+        /// Лёгкий удар по цели, которая только что вышла из оглушения: урон проходит, но цель не оглушена и продолжает
+        /// своё действие. Так серия лёгких не перезапускается сама собой — после неё у противника есть ход.
+        /// </summary>
+        private void LandUnstunned(GameState s, int a, in HitData hit, int attackerBusy)
+        {
+            int di = 1 - a;
+            ref var f = ref s.Fighters[a];
+            ref var d = ref s.Fighters[di];
+
+            DealDamage(s, a, hit.Damage);
+            f.HitstopTicks = hit.HitstopTicks;
+            if (d.Health.Raw <= 0)
+            {
+                Emit(s, SimEventType.Hit, a, di, hit.Damage, 0, combo: 1, slot: -1, position: d.Position);
+                Kill(s, a, ref d, FixVec2.Zero);
+                return;
+            }
+            d.HitstopTicks = hit.HitstopTicks;
+            Emit(s, SimEventType.Hit, a, di, hit.Damage, -attackerBusy, combo: 1, slot: -1, position: d.Position);
         }
 
         /// <summary>
@@ -852,6 +916,7 @@ namespace Game.Simulation
             }
             Enter(ref d, ActionState.Hitstun);
             d.StunTicks = hitstun;
+            d.StunImmunityTicks = 0; // оглушил тяжёлый или скилл — серия продолжается; иммунитет — после выхода из неё
             d.Velocity = knock;
             d.HitstopTicks = hit.HitstopTicks;
             d.ComboHits = n + 1;
@@ -1010,6 +1075,7 @@ namespace Game.Simulation
                     o.TicksLeft = sk.ProjectileLifetimeTicks;
                     o.Evaded = false;
                     Enter(ref d, ActionState.Idle);
+                    d.ParryCooldown = 0;
                     d.HitstopTicks = Rules.ReflectHitstopTicks;
                     Emit(s, SimEventType.ProjectileReflected, ti, attacker, Fix.Zero, 0, slot: (int)o.Slot, caster: caster, position: from);
                     return;

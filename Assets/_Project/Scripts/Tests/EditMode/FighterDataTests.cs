@@ -24,6 +24,44 @@ namespace Game.Tests
         private static IEnumerable<FighterDefinition> Fighters() => Roster().Fighters.Where(f => f != null);
 
         [Test]
+        public void AttackSpeed_ScalesTheWholeSwing_ButNotTheStun()
+        {
+            var data = ScriptableObject.CreateInstance<AttackData>();
+            var def = ScriptableObject.CreateInstance<FighterDefinition>();
+            try
+            {
+                data.StartupFrames = 10;
+                data.ActiveFrames = 3;
+                data.RecoveryFrames = 20;
+                data.HitstunFrames = 15;
+                var normal = data.ToSpec(AttackKind.Light);
+                var slow = data.ToSpec(AttackKind.Light, 0.5f);
+                var fast = data.ToSpec(AttackKind.Light, 2f);
+
+                Assert.AreEqual(SimTime.Frames(20), slow.StartupTicks);
+                Assert.AreEqual(SimTime.Frames(6), slow.ActiveTicks);
+                Assert.AreEqual(SimTime.Frames(40), slow.RecoveryTicks);
+                Assert.AreEqual(SimTime.Frames(5), fast.StartupTicks);
+                Assert.AreEqual(SimTime.Frames(2), fast.ActiveTicks, "1.5 кадра округляются вверх");
+                Assert.AreEqual(SimTime.Frames(10), fast.RecoveryTicks);
+                Assert.AreEqual(normal.HitstunTicks, slow.HitstunTicks, "Оглушение цели от скорости атаки не зависит");
+                Assert.AreEqual(normal.HitstunTicks, fast.HitstunTicks);
+
+                def.LightAttack = data;
+                def.HeavyAttack = data;
+                def.AttackSpeed = 0.5f;
+                var spec = def.ToSpec();
+                Assert.AreEqual(slow.TotalTicks, spec.Light.TotalTicks);
+                Assert.AreEqual(slow.TotalTicks, spec.Heavy.TotalTicks);
+            }
+            finally
+            {
+                Object.DestroyImmediate(def);
+                Object.DestroyImmediate(data);
+            }
+        }
+
+        [Test]
         public void Roster_IsValid_AndContainsEveryFighterAsset()
         {
             var roster = Roster();

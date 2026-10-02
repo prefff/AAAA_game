@@ -18,11 +18,11 @@ MonoBehaviour:
   ManaPerDamageTaken: 0.35
   ParryWindowFrames: 11
   ParryWhiffRecoveryFrames: 8
+  ParryRearmFrames: 30
   DodgeSpeed: 8
   DodgeFrames: 15
   DodgeIFrames: 8
   DodgeStaminaCost: 20
-  DodgeToParryCancelFrames: 9
   BlockDamageMultiplier: 0.3
   BlockKnockbackMultiplier: 0.3
   InputBufferFrames: 7

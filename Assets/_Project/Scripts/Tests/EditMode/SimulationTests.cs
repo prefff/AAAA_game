@@ -35,6 +35,16 @@ namespace Game.Tests
             for (int i = 0; i < n; i++) Tick();
         }
 
+        /// <summary> Боец зажимает блок и ждёт конца окна парирования: дальше — обычный блок. </summary>
+        public void HoldBlock(int fighter)
+        {
+            var cmd = Cmd(CommandKind.BlockStart);
+            if (fighter == 0) Tick(cmd);
+            else Tick(default, cmd);
+            Ticks(Sim.Setup.Fighters[fighter].ParryWindowTicks);
+            Assert.AreEqual(ActionState.Block, S.Fighters[fighter].State);
+        }
+
         /// <summary> Тикать без ввода, пока не выполнится условие; возвращает число тиков. </summary>
         public int TickUntil(System.Func<bool> condition, int limit = 300)
         {
@@ -221,8 +231,7 @@ namespace Game.Tests
         {
             var h = new SimHarness(SimHarness.Duel());
             var light = h.Spec0.Light;
-            h.Tick(default, SimHarness.Cmd(CommandKind.BlockStart));
-            Assert.AreEqual(ActionState.Block, h.P1.State);
+            h.HoldBlock(1);
 
             var hp = h.P1.Health;
             h.Tick(SimHarness.Cmd(CommandKind.LightAttack));
@@ -287,12 +296,14 @@ namespace Game.Tests
         }
 
         [Test]
-        public void LightStartup_CancelsIntoBlock()
+        public void LightStartup_CancelsIntoBlock_ThatOpensWithParry()
         {
             var h = new SimHarness(SimHarness.Duel(5f));
             h.Tick(SimHarness.Cmd(CommandKind.LightAttack));
             h.Tick(SimHarness.Cmd(CommandKind.BlockStart));
-            Assert.AreEqual(ActionState.Block, h.P0.State);
+            Assert.AreEqual(ActionState.Parry, h.P0.State, "Блок начинается с окна парирования");
+            h.Ticks(h.Spec0.ParryWindowTicks);
+            Assert.AreEqual(ActionState.Block, h.P0.State, "Палец держит блок — после окна обычный блок");
         }
 
         [Test]
@@ -320,18 +331,6 @@ namespace Game.Tests
             Assert.AreEqual(max - h.Spec0.DodgeStaminaCost, h.P0.Stamina);
         }
 
-        [Test]
-        public void FlickAfterDodgeStart_CancelsIntoParry_AndRefundsDodge()
-        {
-            var h = new SimHarness(SimHarness.Duel(5f));
-            var max = h.P0.Stamina;
-            h.Tick(SimHarness.Cmd(CommandKind.LightAttack));
-            h.Tick(SimHarness.Cmd(CommandKind.Dodge, 1f, 0f));
-            h.Ticks(3);
-            h.Tick(SimHarness.Cmd(CommandKind.Parry));
-            Assert.AreEqual(ActionState.Parry, h.P0.State);
-            Assert.AreEqual(max, h.P0.Stamina);
-        }
 
         [Test]
         public void BufferedAttack_StartsOnTheTickRecoveryEnds()
@@ -440,7 +439,7 @@ namespace Game.Tests
         public void FrameAdvantage_MatchesWhoActsFirst(bool blocked)
         {
             var h = new SimHarness(SimHarness.Duel());
-            if (blocked) h.Tick(default, SimHarness.Cmd(CommandKind.BlockStart));
+            if (blocked) h.HoldBlock(1);
             h.Tick(SimHarness.Cmd(CommandKind.LightAttack));
             var type = blocked ? SimEventType.Blocked : SimEventType.Hit;
             h.TickUntil(() => h.Has(type), 20);
@@ -754,6 +753,144 @@ namespace Game.Tests
         }
     }
 
+    /// <summary> Парирование — начало блока («блок вовремя»); дёрганье блока парирование не спамит. </summary>
+    public class BlockParryTests
+    {
+        [Test]
+        public void BlockPressedInTime_ParriesTheHit_ThenHeldBlockReturns()
+        {
+            var h = new SimHarness(SimHarness.Duel());
+            h.Tick(SimHarness.Cmd(CommandKind.LightAttack));
+            // Блок нажат так, что удар выходит посреди окна парирования.
+            h.Ticks(h.Spec0.Light.StartupTicks - h.Spec1.ParryWindowTicks / 2 - 1);
+            h.Tick(default, SimHarness.Cmd(CommandKind.BlockStart));
+            h.TickUntil(() => h.Has(SimEventType.Parried), 20);
+
+            Assert.AreEqual(ActionState.ParryStunned, h.P0.State);
+            Assert.AreEqual(h.Spec1.MaxHealth, h.P1.Health);
+            h.TickUntil(() => h.P1.State == ActionState.Block, 20);
+        }
+
+        [Test]
+        public void BlockPressedEarly_OnlyBlocks()
+        {
+            var h = new SimHarness(SimHarness.Duel());
+            h.HoldBlock(1);
+            h.Tick(SimHarness.Cmd(CommandKind.LightAttack));
+            h.TickUntil(() => h.Has(SimEventType.Blocked), 20);
+            Assert.IsFalse(h.Has(SimEventType.Parried));
+        }
+
+        [Test]
+        public void RepressingBlock_GivesPlainBlock_UntilParryRearms()
+        {
+            var h = new SimHarness(SimHarness.Duel(5f));
+            h.Tick(default, SimHarness.Cmd(CommandKind.BlockStart));
+            Assert.AreEqual(ActionState.Parry, h.P1.State);
+            h.Tick(default, SimHarness.Cmd(CommandKind.BlockEnd));
+            h.TickUntil(() => h.P1.State == ActionState.Idle, 40); // окно доиграло, короткая уязвимость прошла
+
+            h.Tick(default, SimHarness.Cmd(CommandKind.BlockStart));
+            Assert.AreEqual(ActionState.Block, h.P1.State, "Парирование ещё не перезарядилось — обычный блок");
+            h.Tick(default, SimHarness.Cmd(CommandKind.BlockEnd));
+
+            h.Ticks(h.Spec1.ParryRearmTicks);
+            h.Tick(default, SimHarness.Cmd(CommandKind.BlockStart));
+            Assert.AreEqual(ActionState.Parry, h.P1.State);
+        }
+
+        [Test]
+        public void SuccessfulParry_RearmsAtOnce()
+        {
+            var h = new SimHarness(SimHarness.Duel());
+            h.Tick(SimHarness.Cmd(CommandKind.LightAttack), SimHarness.Cmd(CommandKind.BlockStart));
+            h.TickUntil(() => h.Has(SimEventType.Parried), 20);
+            Assert.AreEqual(0, h.P1.ParryCooldown, "Следующий удар серии тоже можно спарировать");
+        }
+
+        [Test]
+        public void HeldBlock_CanStillDodge_DuringTheParryWindow()
+        {
+            var h = new SimHarness(SimHarness.Duel(5f));
+            h.Tick(default, SimHarness.Cmd(CommandKind.BlockStart));
+            h.Tick(default, SimHarness.Cmd(CommandKind.Dodge, 1f, 0f));
+            Assert.AreEqual(ActionState.Dodge, h.P1.State);
+        }
+    }
+
+    /// <summary> Спам лёгких: серия короткая, после оглушения лёгкие не запирают снова, лёгкий в блок наказуем. </summary>
+    public class LightSpamTests
+    {
+        [Test]
+        public void LightChain_StopsAtTheLimit()
+        {
+            // Цель у стены: отбрасывание гаснет, удары достают всегда; атакующий жмёт удар каждый тик.
+            var setup = SimHarness.Duel(1.2f);
+            setup.Arena = new ArenaSpec { Min = FixVec2.FromFloat(-5f, -5f), Max = FixVec2.FromFloat(5f, 1.7f) };
+            var h = new SimHarness(setup);
+            for (int i = 0; i < 180; i++) h.Tick(SimHarness.Cmd(CommandKind.LightAttack));
+
+            int longest = h.Events.Where(e => e.Type == SimEventType.Hit).Max(e => e.Combo);
+            Assert.AreEqual(h.Rules.LightChainMax, longest);
+        }
+
+        [Test]
+        public void LightHit_CancelsIntoHeavy_ThatConnects()
+        {
+            var h = new SimHarness(SimHarness.Duel());
+            h.Tick(SimHarness.Cmd(CommandKind.LightAttack));
+            h.TickUntil(() => h.Has(SimEventType.Hit), 20);
+            h.Tick(SimHarness.Cmd(CommandKind.HeavyAttack)); // стоп-кадр → буфер → отмена после него
+            h.TickUntil(() => h.Events.Count(e => e.Type == SimEventType.Hit) == 2, 40);
+
+            var second = h.Events.Where(e => e.Type == SimEventType.Hit).ElementAt(1);
+            Assert.AreEqual(2, second.Combo, "Тяжёлый после лёгкого — продолжение серии: цель не успела вырваться");
+        }
+
+        [Test]
+        public void AfterHitstun_LightsDoNotStun_ButHeavyDoes()
+        {
+            var h = new SimHarness(SimHarness.Duel());
+            h.Tick(SimHarness.Cmd(CommandKind.LightAttack));
+            h.TickUntil(() => h.Has(SimEventType.Hit), 20);
+            h.TickUntil(() => h.P1.State == ActionState.Idle, 60);
+            Assert.Greater(h.P1.StunImmunityTicks, 0, "Вышел из оглушения — короткий иммунитет к лёгким");
+
+            h.TickUntil(() => h.P0.State == ActionState.Idle, 60);
+            var hp = h.P1.Health;
+            h.Tick(SimHarness.Cmd(CommandKind.LightAttack));
+            h.TickUntil(() => h.P1.Health < hp, 20);
+            Assert.AreNotEqual(ActionState.Hitstun, h.P1.State, "Лёгкий сразу после серии наносит урон, но не оглушает");
+
+            h.P1.StunImmunityTicks = 600;
+            h.TickUntil(() => h.P0.State == ActionState.Idle, 60);
+            hp = h.P1.Health;
+            h.Tick(SimHarness.Cmd(CommandKind.HeavyAttack));
+            h.TickUntil(() => h.P1.Health < hp, 30);
+            Assert.AreEqual(ActionState.Hitstun, h.P1.State, "Тяжёлый оглушает и во время иммунитета");
+        }
+
+        [Test]
+        public void LightOnBlock_IsPunishable_AndCancelsOnlyIntoHeavy()
+        {
+            var h = new SimHarness(SimHarness.Duel());
+            h.HoldBlock(1);
+            h.Tick(SimHarness.Cmd(CommandKind.LightAttack));
+            h.TickUntil(() => h.Has(SimEventType.Blocked), 20);
+            var blocked = h.Events.First(e => e.Type == SimEventType.Blocked);
+            Assert.Less(blocked.FrameAdvantage, -h.Spec1.Light.StartupTicks, "Лёгкий в блок наказуем лёгким");
+
+            int ticks = h.P0.StateTicks;
+            h.Ticks(h.P0.HitstopTicks);
+            h.Tick(SimHarness.Cmd(CommandKind.LightAttack));
+            Assert.AreEqual(ticks + 1, h.P0.StateTicks, "Заблокированный лёгкий не отменяется в лёгкий");
+
+            h.Tick(SimHarness.Cmd(CommandKind.HeavyAttack));
+            Assert.AreEqual(AttackKind.Heavy, h.P0.Attack, "…а в тяжёлый — отменяется: давление на блок");
+            Assert.AreEqual(0, h.P0.StateTicks);
+        }
+    }
+
     public class TrainingBotTests
     {
         [Test]
@@ -761,8 +898,9 @@ namespace Game.Tests
         {
             var h = new SimHarness(SimHarness.Duel());
             h.Tick(default, TrainingBot.Think(h.S, h.Sim.Setup, 1, BotMode.Block));
-            Assert.AreEqual(ActionState.Block, h.P1.State);
-            h.Tick(default, TrainingBot.Think(h.S, h.Sim.Setup, 1, BotMode.Block));
+            Assert.AreEqual(ActionState.Parry, h.P1.State, "Блок начинается с окна парирования");
+            for (int i = 0; i <= h.Spec1.ParryWindowTicks; i++)
+                h.Tick(default, TrainingBot.Think(h.S, h.Sim.Setup, 1, BotMode.Block));
             Assert.AreEqual(ActionState.Block, h.P1.State);
         }
 
@@ -773,6 +911,24 @@ namespace Game.Tests
             for (int i = 0; i < 300 && h.P0.Health == h.Spec0.MaxHealth; i++)
                 h.Tick(default, TrainingBot.Think(h.S, h.Sim.Setup, 1, BotMode.Attack));
             Assert.Less(h.P0.Health.Raw, h.Spec0.MaxHealth.Raw, "Бот должен подойти и ударить");
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void AttackBot_GoesAroundAnObstacle_InsteadOfPushingIntoIt(bool pillar)
+        {
+            // Игрок стоит ровно за серединой препятствия: прямой путь бота упирается в него.
+            var setup = SimHarness.Duel(6f);
+            setup.Arena.Obstacles = new[]
+            {
+                pillar
+                    ? Obstacle.Circle(FixVec2.FromFloat(0f, 3f), Fix.FromFloat(1.2f))
+                    : Obstacle.Box(FixVec2.FromFloat(0f, 3f), FixVec2.FromFloat(2.5f, 0.4f)),
+            };
+            var h = new SimHarness(setup);
+            for (int i = 0; i < 600 && h.P0.Health == h.Spec0.MaxHealth; i++)
+                h.Tick(default, TrainingBot.Think(h.S, h.Sim.Setup, 1, BotMode.Attack));
+            Assert.Less(h.P0.Health.Raw, h.Spec0.MaxHealth.Raw, "Бот должен обойти препятствие и ударить");
         }
 
         [Test]

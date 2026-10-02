@@ -23,8 +23,12 @@ namespace Game.Simulation
         public AttackKind Attack;
         /// <summary> Удар уже сработал (попал, заблокирован, спарирован или прошёл сквозь i-frames) — второй раз не бьёт. </summary>
         public bool AttackResolved;
-        /// <summary> Удар попал или заблокирован — можно отменить в следующий удар (комбо). </summary>
+        /// <summary> Удар попал или заблокирован — можно отменить в тяжёлый удар или скилл (комбо). </summary>
         public bool AttackConnected;
+        /// <summary> Удар оглушил цель — лёгкий можно отменить и в следующий лёгкий. </summary>
+        public bool AttackStunned;
+        /// <summary> Номер лёгкого удара в текущей серии отмен (1 — первый). </summary>
+        public int LightChain;
 
         /// <summary> Оставшийся hitstun / blockstun / оглушение после парирования. </summary>
         public int StunTicks;
@@ -32,10 +36,13 @@ namespace Game.Simulation
         public int HitstopTicks;
 
         public FixVec2 DodgeDirection;
-        public bool DodgePaid;
 
         /// <summary> Палец держит блок: после оглушения/удара боец сам возвращается в блок. </summary>
         public bool BlockHeld;
+        /// <summary> Сколько тиков до нового парирования (0 — блок начнётся с парирования). </summary>
+        public int ParryCooldown;
+        /// <summary> Сколько ещё тиков лёгкие удары не оглушают (после выхода из hitstun). </summary>
+        public int StunImmunityTicks;
 
         public Fix Health;
         public Fix Stamina;
@@ -77,10 +84,10 @@ namespace Game.Simulation
         {
             h.Add(Position); h.Add(Facing); h.Add(Velocity); h.Add(MoveInput);
             h.Add((int)State); h.Add(StateTicks);
-            h.Add((int)Attack); h.Add(AttackResolved); h.Add(AttackConnected);
+            h.Add((int)Attack); h.Add(AttackResolved); h.Add(AttackConnected); h.Add(AttackStunned); h.Add(LightChain);
             h.Add(StunTicks); h.Add(HitstopTicks);
-            h.Add(DodgeDirection); h.Add(DodgePaid);
-            h.Add(BlockHeld);
+            h.Add(DodgeDirection);
+            h.Add(BlockHeld); h.Add(ParryCooldown); h.Add(StunImmunityTicks);
             h.Add(Health); h.Add(Stamina); h.Add(StaminaRegenDelay); h.Add(Mana);
             h.Add((int)Buffered.Kind); h.Add(Buffered.DirX); h.Add(Buffered.DirY); h.Add(Buffered.Id); h.Add(BufferTicks);
             h.Add((int)CastSlot); h.Add(SkillFired); h.Add(SkillAim);

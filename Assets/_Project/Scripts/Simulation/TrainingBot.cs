@@ -35,7 +35,7 @@
         public const int DefaultAttackPeriodTicks = SimTime.TickRate; // раз в секунду
         public const int ModeCount = 5;
 
-        /// <summary> Реакция, тиков (~170 мс — быстрый человек): лёгкий удар (startup 6) бот не видит, тяжёлый (14) — успевает. </summary>
+        /// <summary> Реакция, тиков (~170 мс — быстрый человек): лёгкий удар (startup 7) бот не видит, тяжёлый (14) — успевает. </summary>
         public const int ReactionTicks = 10;
 
         /// <summary> Ультимейт откатится за столько тиков — остальные скиллы не тратят его ману. </summary>
@@ -45,6 +45,11 @@
 
         private static readonly Fix InvSqrt2 = Fix.FromRaw(46341); // 1/√2: поворот на 45° без тригонометрии
         private static readonly Fix ThreatMargin = Fix.FromRaw(Fix.OneRaw / 4);
+        /// <summary> Отступ точек обхода от препятствия сверх радиуса тела: тело не цепляет угол. </summary>
+        private static readonly Fix DetourClearance = Fix.FromFloat(0.3f);
+        private static readonly Fix PathSlack = Fix.FromFloat(0.05f);
+        /// <summary> Точка обхода ближе 10 см считается достигнутой. </summary>
+        private static readonly Fix ReachedSq = Fix.FromFloat(0.01f);
 
         /// <summary> Характер режима: шансы из 100. </summary>
         private readonly struct Style
@@ -119,7 +124,7 @@
 
                 case BotMode.Attack:
                     if (me.BlockHeld) input.Add(new SimCommand(CommandKind.BlockEnd));
-                    if (!Approach(ref input, me, foe, setup.Fighters[self]) && attackPeriodTicks > 0 && s.Tick % attackPeriodTicks == 0)
+                    if (!Approach(ref input, me, foe, setup.Fighters[self], setup.Arena) && attackPeriodTicks > 0 && s.Tick % attackPeriodTicks == 0)
                     {
                         // Каждый третий — тяжёлый: разные тайминги для парирования.
                         bool heavy = (s.Tick / attackPeriodTicks) % 3 == 2;
@@ -138,14 +143,86 @@
             return input;
         }
 
-        /// <summary> Идти к противнику, пока он дальше дистанции удара. true — ещё идём. </summary>
-        private static bool Approach(ref TickInput input, in FighterSim me, in FighterSim foe, FighterSpec spec)
+        /// <summary> Идти к противнику (в обход препятствий), пока он дальше дистанции удара. true — ещё идём. </summary>
+        private static bool Approach(ref TickInput input, in FighterSim me, in FighterSim foe, FighterSpec spec, ArenaSpec arena)
         {
             var reach = spec.Light.HitOffset + spec.Light.HitRadius;
             var toFoe = foe.Position - me.Position;
             if (toFoe.SqrMagnitude <= reach * reach) return false;
-            SetMove(ref input, toFoe.Normalized);
+            SetMove(ref input, PathTo(me.Position, foe.Position, spec.BodyRadius, arena));
             return true;
+        }
+
+        /// <summary>
+        /// Направление к цели в обход препятствий. Прямой путь свободен — прямо; иначе — к точке обхода ближайшего
+        /// перекрывающего препятствия (угол стенки, бок колонны). Из точек обхода лучше видимая, из видимых — та, от
+        /// которой цель уже видна, дальше — с самым коротким путём. Пересчёт каждый тик: бот срезает угол, как только
+        /// цель становится видна, и не упирается в стенку, за которой стоит противник.
+        /// </summary>
+        private static FixVec2 PathTo(FixVec2 from, FixVec2 to, Fix radius, ArenaSpec arena)
+        {
+            var direct = (to - from).Normalized;
+            // Путь проверяем по чуть уменьшенному телу: прижатый к стенке бот сам её не «пересекает».
+            var probe = radius - PathSlack;
+            var obstacles = arena.Obstacles;
+            int blocking = -1;
+            var nearest = Fix.Zero;
+            for (int k = 0; k < obstacles.Length; k++)
+            {
+                if (!Collision.SegmentHitsObstacle(from, to, obstacles[k], probe)) continue;
+                var d = (obstacles[k].Center - from).SqrMagnitude;
+                if (blocking < 0 || d < nearest)
+                {
+                    blocking = k;
+                    nearest = d;
+                }
+            }
+            if (blocking < 0) return direct;
+
+            var o = obstacles[blocking];
+            var pad = radius + DetourClearance;
+            int corners = o.Shape == ObstacleShape.Box ? 4 : 2;
+            var best = FixVec2.Zero;
+            int bestRank = -1;
+            var bestCost = Fix.Zero;
+            for (int c = 0; c < corners; c++)
+            {
+                FixVec2 p;
+                if (o.Shape == ObstacleShape.Box)
+                {
+                    var hx = o.HalfExtents.X + pad;
+                    var hy = o.HalfExtents.Y + pad;
+                    p = o.Center + new FixVec2((c & 1) == 0 ? hx : -hx, (c & 2) == 0 ? hy : -hy);
+                }
+                else
+                {
+                    var side = Perp(direct) * (o.Radius + pad);
+                    p = o.Center + (c == 0 ? side : -side);
+                }
+                p = Collision.ResolveArena(p, radius, arena);
+                var leg = p - from;
+                if (leg.SqrMagnitude < ReachedSq) continue; // уже здесь — нужна следующая точка
+
+                int rank = (PathBlocked(from, p, probe, arena) ? 0 : 2) + (PathBlocked(p, to, probe, arena) ? 0 : 1);
+                var cost = leg.Magnitude + (to - p).Magnitude;
+                if (rank > bestRank || (rank == bestRank && cost < bestCost))
+                {
+                    best = p;
+                    bestRank = rank;
+                    bestCost = cost;
+                }
+            }
+            if (bestRank < 0) return direct;
+            var dir = (best - from).Normalized;
+            return dir.IsZero ? direct : dir;
+        }
+
+        private static bool PathBlocked(FixVec2 a, FixVec2 b, Fix probe, ArenaSpec arena)
+        {
+            var obstacles = arena.Obstacles;
+            for (int k = 0; k < obstacles.Length; k++)
+                if (Collision.SegmentHitsObstacle(a, b, obstacles[k], probe)) return true;
+            return false;
         }
 
         // ---------- Ближник ----------
@@ -168,7 +245,7 @@
             if (FollowUp(ref input, v, roll)) return;
             if (CanAct(v.Me) && BrawlerSkills(ref input, v, decisionTick, roll)) return;
 
-            if (Approach(ref input, v.Me, v.Foe, v.MySpec) || !decisionTick || !CanAct(v.Me)) return;
+            if (Approach(ref input, v.Me, v.Foe, v.MySpec, v.Arena) || !decisionTick || !CanAct(v.Me)) return;
 
             if (roll < 45) input.Add(new SimCommand(CommandKind.LightAttack));
             else if (roll < 60) input.Add(new SimCommand(CommandKind.HeavyAttack));
@@ -180,8 +257,8 @@
 
         /// <summary>
         /// Лёгкий удар попал: отменить его в то, что наверняка достанет цель в hitstun, — ультимейт, нюк, тяжёлый, —
-        /// иначе продолжить серию лёгким. hitstun затухает с каждым попаданием, поэтому тяжёлый (startup 14) — только
-        /// после первого. true — команда отдана.
+        /// иначе продолжить серию лёгким, пока она не упёрлась в LightChainMax. hitstun затухает с каждым попаданием,
+        /// поэтому тяжёлый (startup 14) — только после первого. true — команда отдана.
         /// </summary>
         private static bool FollowUp(ref TickInput input, in View v, uint roll)
         {
@@ -209,7 +286,7 @@
                 input.Add(new SimCommand(CommandKind.HeavyAttack));
                 return true;
             }
-            if (hits < 3)
+            if (me.Attack == AttackKind.Light && me.AttackStunned && me.LightChain < v.Setup.Rules.LightChainMax)
             {
                 input.Add(new SimCommand(CommandKind.LightAttack));
                 return true;
@@ -353,7 +430,7 @@
                 if (busy) return true;
                 if (!CanDefend(v)) return false;
                 // Отражение — лучший ответ, но не всегда: иначе нюк против бота бесполезен.
-                if (reflectable && t >= 1 && t <= v.MySpec.ParryWindowTicks - 2 && choice % 3 != 0)
+                if (reflectable && me.ParryCooldown == 0 && t >= 1 && t <= v.MySpec.ParryWindowTicks - 2 && choice % 3 != 0)
                 {
                     input.Add(new SimCommand(CommandKind.Parry));
                     return true;
@@ -370,7 +447,7 @@
             if (ReadsHeavy(v, style.ReadHeavy))
             {
                 if (busy) return true;
-                if (CanDefend(v))
+                if (CanDefend(v) && me.ParryCooldown == 0)
                 {
                     input.Add(new SimCommand(CommandKind.Parry));
                     return true;

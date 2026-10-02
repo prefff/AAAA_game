@@ -24,18 +24,20 @@ namespace Game.Combat
         [Tooltip("Мана за единицу полученного урона.")]
         [Min(0f)] public float ManaPerDamageTaken = 0.35f;
 
-        [Header("Parry")]
+        [Header("Parry (блок вовремя)")]
+        [Tooltip("Первые кадры блока — парирование.")]
         [Min(1)] public int ParryWindowFrames = 11;
-        [Tooltip("Парирование мимо: столько кадров боец уязвим.")]
+        [Tooltip("Парирование мимо, а блок уже отпущен: столько кадров боец уязвим.")]
         [Min(0)] public int ParryWhiffRecoveryFrames = 8;
+        [Tooltip("Новое парирование — не раньше, чем через столько кадров после начала прошлого (удачное — сразу). " +
+                 "Пока не перезарядилось, нажатие блока даёт обычный блок: дёрганье блока не спамит парирование.")]
+        [Min(0)] public int ParryRearmFrames = 30;
 
         [Header("Dodge")]
         [Min(0f)] public float DodgeSpeed = 8f;
         [Min(1)] public int DodgeFrames = 15;
         [Min(0)] public int DodgeIFrames = 8;
         [Min(0f)] public float DodgeStaminaCost = 20f;
-        [Tooltip("Столько кадров от начала уклонения flick-парирование ещё отменяет его (с возвратом стамины).")]
-        [Min(0)] public int DodgeToParryCancelFrames = 9;
 
         [Header("Block")]
         [Range(0f, 1f)] public float BlockDamageMultiplier = 0.3f;
@@ -54,11 +56,11 @@ namespace Game.Combat
             spec.ManaPerDamageTaken = Fix.FromFloat(ManaPerDamageTaken);
             spec.ParryWindowTicks = SimTime.Frames(ParryWindowFrames);
             spec.ParryWhiffRecoveryTicks = SimTime.Frames(ParryWhiffRecoveryFrames);
+            spec.ParryRearmTicks = SimTime.Frames(ParryRearmFrames);
             spec.DodgeSpeed = SimTime.PerSecond(DodgeSpeed);
             spec.DodgeTicks = SimTime.Frames(DodgeFrames);
             spec.DodgeIFrameTicks = SimTime.Frames(DodgeIFrames);
             spec.DodgeStaminaCost = Fix.FromFloat(DodgeStaminaCost);
-            spec.DodgeToParryCancelTicks = SimTime.Frames(DodgeToParryCancelFrames);
             spec.BlockDamageMultiplier = Fix.FromFloat(BlockDamageMultiplier);
             spec.BlockKnockbackMultiplier = Fix.FromFloat(BlockKnockbackMultiplier);
             spec.InputBufferTicks = SimTime.Frames(InputBufferFrames);

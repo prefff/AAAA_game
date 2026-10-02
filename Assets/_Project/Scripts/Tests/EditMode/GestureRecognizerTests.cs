@@ -73,7 +73,7 @@ namespace Game.Tests
             Assert.AreEqual(10.04, _out[1].RecognizedTime, 1e-9);
 
             _r.TouchMoved(At(200f), 10.15);
-            _r.TouchEnded(At(200f), 10.25); // медленно для flick — остаётся уклонением
+            _r.TouchEnded(At(200f), 10.25); // отпускание после уклонения ничего не добавляет
             Assert.AreEqual(new[] { CommandType.LightAttack, CommandType.Dodge }, Types);
         }
 
@@ -88,23 +88,24 @@ namespace Game.Tests
         }
 
         [Test]
-        public void Flick_CancelsIntoParryOnRelease()
+        public void FastShortSwipe_StaysDodge_NeverParry()
         {
+            // Рядом с противником перекат делают резко — раньше такой свайп превращался в парирование.
             _r.TouchBegan(Start, 10.0);
             _r.TouchMoved(At(80f), 10.03);
             _r.TouchEnded(At(150f), 10.08); // 15 мм за 80 мс
 
-            Assert.AreEqual(new[] { CommandType.LightAttack, CommandType.Dodge, CommandType.Parry }, Types);
-            Assert.AreEqual(10.08, _out[2].RecognizedTime, 1e-9);
+            Assert.AreEqual(new[] { CommandType.LightAttack, CommandType.Dodge }, Types);
         }
 
         [Test]
-        public void Flick_WithoutMoveEvents_IsParry()
+        public void FastRelease_WithoutMoveEvents_IsDodge()
         {
             _r.TouchBegan(Start, 10.0);
             _r.TouchEnded(At(0f, 150f), 10.06);
 
-            Assert.AreEqual(new[] { CommandType.LightAttack, CommandType.Parry }, Types);
+            Assert.AreEqual(new[] { CommandType.LightAttack, CommandType.Dodge }, Types);
+            Assert.AreEqual(Vector2.up, _out[1].Direction);
         }
 
         [Test]

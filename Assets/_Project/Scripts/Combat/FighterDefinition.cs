@@ -41,6 +41,9 @@ namespace Game.Combat
         [Header("Attacks")]
         public AttackData LightAttack;
         public AttackData HeavyAttack;
+        [Tooltip("Скорость атаки: весь цикл лёгкого и тяжёлого удара делится на неё (1 — как в данных удара, 0.8 — на " +
+                 "четверть дольше). Оглушение цели не меняется, поэтому медленный боец после удара освобождается позже.")]
+        [Range(0.5f, 2f)] public float AttackSpeed = 1f;
 
         [Header("Skills")]
         public SkillData Skill1;
@@ -64,8 +67,8 @@ namespace Game.Combat
                 HurtRadius = Fix.FromFloat(HurtRadius),
             };
             (common != null ? common : FighterCommonData.LoadOrDefault()).ApplyTo(spec);
-            if (LightAttack != null) spec.Light = LightAttack.ToSpec(AttackKind.Light);
-            if (HeavyAttack != null) spec.Heavy = HeavyAttack.ToSpec(AttackKind.Heavy);
+            if (LightAttack != null) spec.Light = LightAttack.ToSpec(AttackKind.Light, AttackSpeed);
+            if (HeavyAttack != null) spec.Heavy = HeavyAttack.ToSpec(AttackKind.Heavy, AttackSpeed);
             for (int slot = 0; slot < FighterSpec.SkillSlots; slot++)
                 spec.Skills[slot] = Skill(slot) != null ? Skill(slot).ToSpec() : null;
             return spec;

@@ -9,9 +9,9 @@ namespace Game.Input
     /// а продолжение жеста отменяет её в другую.
     ///
     ///   касание                          → LightAttack сразу (startup удара — окно распознавания);
-    ///   сдвиг дальше порога              → Dodge сразу, в сторону сдвига (отменяет удар в startup);
-    ///   быстрый короткий flick           → Parry при отпускании (отменяет удар/начатое уклонение);
+    ///   сдвиг дальше порога              → Dodge сразу, в сторону сдвига (отменяет удар в startup), с любой скоростью;
     ///   удержание без сдвига             → BlockStart по порогу (отменяет удар в startup), отпускание → BlockEnd;
+    ///                                      первые кадры блока — парирование («блок вовремя», см. FightSimulation);
     ///   удержание, потом сдвиг           → Dodge из блока;
     ///   второй палец, пока первый на экране → HeavyAttack (отменяет лёгкий удар в startup), первый палец
     ///                                      после этого жестов не даёт.
@@ -99,13 +99,9 @@ namespace Game.Input
                 if (phase == Phase.Holding) return;
             }
 
-            // Flick: сдвиг (уклонение уже начато) или резкий бросок пальца между событиями.
-            bool moved = phase == Phase.Dodging || (phase == Phase.Pending && MovedBeyondThreshold(screenPos));
-            if (!moved) return; // тап: удар уже идёт
-
-            if (IsFlick(screenPos, time))
-                Emit(CommandType.Parry, Vector2.zero, _startTime, time);
-            else if (phase == Phase.Pending)
+            // Резкий бросок пальца между событиями: сдвиг виден только при отпускании — это тоже уклонение.
+            // Тап — удар уже идёт; сдвиг с уклонением — оно уже начато.
+            if (phase == Phase.Pending && MovedBeyondThreshold(screenPos))
                 Emit(CommandType.Dodge, WorldDirection(screenPos), _startTime, time);
         }
 
@@ -128,14 +124,6 @@ namespace Game.Input
         {
             float threshold = _settings.DodgeThresholdMm * PixelsPerMm;
             return (screenPos - _startPos).sqrMagnitude >= threshold * threshold;
-        }
-
-        private bool IsFlick(Vector2 screenPos, double time)
-        {
-            double duration = time - _startTime;
-            if (duration > _settings.ParryFlickMaxDuration) return false;
-            float distanceMm = (screenPos - _startPos).magnitude / PixelsPerMm;
-            return distanceMm >= _settings.ParryFlickMinSpeedMmPerSec * Math.Max(duration, 1e-3);
         }
 
         private Vector2 WorldDirection(Vector2 screenPos)

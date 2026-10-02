@@ -502,7 +502,7 @@ namespace Game.Tests
             var h = new SimHarness(SimHarness.Duel());
             h.P1.Stamina = Fix.FromInt(3);
             h.P1.StaminaRegenDelay = 600; // без регенерации до удара
-            h.Tick(default, SimHarness.Cmd(CommandKind.BlockStart));
+            h.HoldBlock(1);
             h.Tick(SimHarness.Cmd(CommandKind.LightAttack));
             h.TickUntil(() => h.Has(SimEventType.GuardBreak), 20);
             int adv = h.Events.First(e => e.Type == SimEventType.GuardBreak).FrameAdvantage;

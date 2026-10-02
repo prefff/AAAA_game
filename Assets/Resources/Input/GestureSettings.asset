@@ -14,6 +14,4 @@ MonoBehaviour:
   m_EditorClassIdentifier: Game.Input::Game.Input.GestureSettings
   GestureZoneMinX: 0.5
   DodgeThresholdMm: 6
-  ParryFlickMaxDuration: 0.12
-  ParryFlickMinSpeedMmPerSec: 100
   HoldThreshold: 0.09
